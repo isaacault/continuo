@@ -38,6 +38,11 @@ def lidarr_world(fake, state):
     fake.on("GET", f"{LIDARR}/artist", [])
     fake.on("POST", f"{LIDARR}/artist", handler=lambda r: state.update(added=fake.body(r)) or
             {"id": 9, **fake.body(r)})
+    # Lidarr 3: an artist added with monitor=none comes back unmonitored.
+    fake.on("GET", f"{LIDARR}/artist/9", handler=lambda r: {
+        "id": 9, "monitored": state.get("artist_monitored", False), "monitorNewItems": "none"})
+    fake.on("PUT", f"{LIDARR}/artist/9", handler=lambda r: state.update(
+        artist_monitored=fake.body(r)["monitored"]) or {})
     fake.on("GET", f"{LIDARR}/album", handler=lambda r: [album_row()])
     fake.on("GET", f"{LIDARR}/album/412", handler=album_row)
     fake.on("PUT", f"{LIDARR}/album/monitor", handler=monitor)
@@ -76,6 +81,7 @@ def test_full_request_lifecycle(client, fake, monkeypatch):
     assert row["lidarr_album_id"] == 412 and row["lidarr_release_id"] == "rel-1"
     assert state["added"]["monitorNewItems"] == "none"
     assert state["added"]["addOptions"] == {"monitor": "none", "searchForMissingAlbums": False}
+    assert state["artist_monitored"] is True         # switched on after the add
     assert {"name": "AlbumSearch", "albumIds": [412]} in state["commands"]
 
     # Same album again → 409 with the live request id.

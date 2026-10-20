@@ -18,12 +18,18 @@ async def tick() -> None:
             continue
         try:
             before = await lidarr.get_album(row["lidarr_album_id"], fresh=True)
+            artist = await lidarr.get_artist(row["lidarr_artist_id"])
             ok = await lidarr.ensure_album_monitored(row["lidarr_artist_id"],
                                                      row["lidarr_album_id"])
         except Exception:  # noqa: BLE001
             log.exception("reconcile failed for request %s", row["id"])
             continue
-        if not before.get("monitored"):
-            req_db.add_event(row["id"], "remonitored", {"ok": ok})
-            log.info("request %s: album %s had been un-monitored; re-asserted (ok=%s)",
-                     row["id"], row["lidarr_album_id"], ok)
+        drift = [what for what, bad in (
+            ("album_unmonitored", not before.get("monitored")),
+            ("artist_unmonitored", not artist.get("monitored")),
+            ("artist_follows_new_releases", artist.get("monitorNewItems") not in (None, "none")),
+        ) if bad]
+        if drift and (before.get("statistics") or {}).get("trackFileCount", 0) == 0:
+            req_db.add_event(row["id"], "remonitored", {"ok": ok, "drift": drift})
+            log.info("request %s: Lidarr drifted (%s); re-asserted (ok=%s)",
+                     row["id"], ", ".join(drift), ok)

@@ -58,6 +58,10 @@ async def request_album(foreign_album_id: str, request_id: int | None = None) ->
     if not await lidarr.monitor_album(artist_id, album_id):
         raise RuntimeError("Couldn't get Lidarr to monitor this album (its tracks never loaded). "
                            "Retry to try again.")
+    if not existing:
+        # Lidarr 3 adds an artist with addOptions.monitor=none as *unmonitored*, whatever
+        # `monitored` says, and only monitored artists' albums are wanted (what Soularr reads).
+        await lidarr.set_artist_monitored(artist_id, True)
     album = await lidarr.get_album(album_id, fresh=True)
     release_id = lidarr.monitored_release_id(album)
     event("album_monitored", {"lidarrAlbumId": album_id, "releaseId": release_id})

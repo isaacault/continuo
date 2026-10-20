@@ -116,7 +116,7 @@ def test_request_album_existing_artist(fake):
     assert calls["monitor_album"] == (10, 99) and calls["album_search"] == [99]
 
 
-def test_request_album_new_artist(fake):
+def test_request_album_new_artist_is_switched_on(fake):
     calls = {}
     ps = _patches(calls, existing=False)
     for p in ps:
@@ -126,7 +126,8 @@ def test_request_album_new_artist(fake):
     finally:
         for p in ps:
             p.stop()
-    assert calls["add_artist"] and "set_artist_monitored" not in calls
+    # Lidarr 3 leaves a monitor=none add unmonitored: request_album must switch it on.
+    assert calls["add_artist"] and calls["set_artist_monitored"] == (20, True)
     assert res["lidarr_artist_id"] == 20 and calls["monitor_album"] == (20, 99)
 
 
@@ -183,3 +184,24 @@ def test_album_search_stats_failure_leaves_requestable(fake):
 def test_normalize_album_bare_id_not_owned():
     assert lidarr.normalize_album({"id": 5})["owned"] is False
     assert lidarr.normalize_album({"id": 5, "statistics": {"trackFileCount": 3}})["owned"] is True
+
+
+def test_reconcile_records_artist_drift(fake):
+    from continuo.db import requests as req_db
+    from continuo.workers import reconcile
+    row = req_db.create(mb_release_group_id="rg-r", title="Honeycomb", artist="Jitwam", year=2019,
+                        artwork_url=None, user_id=None)
+    req_db.update(row["id"], status="searching", lidarr_album_id=556, lidarr_artist_id=49)
+    fake.on("GET", f"{LIDARR}/album/556", {"id": 556, "monitored": True, "statistics": {
+        "trackCount": 12, "trackFileCount": 0}})
+    artist = {"id": 49, "monitored": False, "monitorNewItems": "none"}
+    fake.on("GET", f"{LIDARR}/artist/49", handler=lambda r: dict(artist))
+    fake.on("PUT", f"{LIDARR}/artist/49", handler=lambda r: artist.update(fake.body(r)) or {})
+    fake.on("PUT", f"{LIDARR}/album/monitor", {})
+    fake.on("POST", f"{LIDARR}/command", {"id": None})
+    run(reconcile.tick())
+    assert artist["monitored"] is True and artist["monitorNewItems"] == "none"
+    ev = [e for e in req_db.events(row["id"]) if e["type"] == "remonitored"]
+    assert ev and ev[0]["detail"]["drift"] == ["artist_unmonitored"]
+    run(reconcile.tick())          # stable now: no second event
+    assert len([e for e in req_db.events(row["id"]) if e["type"] == "remonitored"]) == 1
