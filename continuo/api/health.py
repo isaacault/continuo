@@ -31,6 +31,13 @@ async def upstream_status() -> dict:
     return out
 
 
+@router.get("/", include_in_schema=False)
+async def root() -> dict:
+    """What a browser sees at https://music-api.ault.me — the API lives under /v1."""
+    return {"service": "continuo", "version": __version__, "health": "/v1/health",
+            "docs": "/docs"}
+
+
 @router.get("/v1/health", tags=["health"])
 async def health() -> JSONResponse:
     db_ok = db_ping()

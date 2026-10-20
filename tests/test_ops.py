@@ -156,3 +156,27 @@ def test_admin_user_management(client, fake):
                        json={"username": "charlie", "password": "longenough"}).status_code == 409
     assert client.delete("/v1/admin/users/1", headers=bearer(s)).status_code == 400
     assert client.delete(f"/v1/admin/users/{uid}", headers=bearer(s)).status_code == 200
+
+
+def test_slow_loops_are_not_stale_between_runs(fake, monkeypatch):
+    """The nightly loop wakes every 10 min; with a 5 min staleness base it must still count as
+    alive 7 min after its last tick (this 503'd the first deploy)."""
+    import asyncio as aio
+
+    async def go():
+        task = aio.get_running_loop().create_task(aio.sleep(3600))
+        registry.register("nightly", task, lambda: 600)
+        registry.register("status", aio.get_running_loop().create_task(aio.sleep(3600)),
+                          lambda: 45)
+        registry._last_tick["nightly"] -= 7 * 60
+        registry._last_tick["status"] -= 7 * 60
+        snap = registry.snapshot()
+        task.cancel()
+        return snap["nightly"]["stale"], snap["status"]["stale"]
+    assert asyncio.run(go()) == (False, True)
+
+
+def test_root_and_unknown_paths(client):
+    assert client.get("/").json()["health"] == "/v1/health"
+    r = client.get("/nope")
+    assert r.status_code == 404 and r.json()["error"]["code"] == "not_found"

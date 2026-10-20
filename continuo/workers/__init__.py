@@ -18,6 +18,6 @@ def start() -> list[asyncio.Task]:
     for name, (interval, body) in loops.items():
         task = asyncio.get_running_loop().create_task(
             registry.run_forever(name, interval, body), name=f"continuo-{name}")
-        registry.register(name, task)
+        registry.register(name, task, interval)
         tasks.append(task)
     return tasks

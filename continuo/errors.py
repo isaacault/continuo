@@ -3,9 +3,10 @@
 import logging
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException
 
 log = logging.getLogger("continuo")
 
@@ -43,6 +44,7 @@ def install(app: FastAPI) -> None:
     async def _api_error(_req: Request, exc: ApiError):
         return _respond(exc.status, exc.code, exc.message, exc.retryable, exc.extra)
 
+    # Starlette's HTTPException (FastAPI's subclasses it) also covers router 404/405s.
     @app.exception_handler(HTTPException)
     async def _http_error(_req: Request, exc: HTTPException):
         return _respond(exc.status_code, _DEFAULT_CODES.get(exc.status_code, "error"),
