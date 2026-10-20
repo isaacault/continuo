@@ -1,9 +1,11 @@
-"""Health, SSE fan-out, policy check, library index, admin."""
+"""Health, SSE fan-out, import from lidseeker, policy check."""
 import asyncio
+import sqlite3
 
 from conftest import LIDARR, ND, bearer, login, make_user, run
 
-from continuo import events
+from continuo import cli, events
+from continuo.db import requests as req_db
 from continuo.db import users as users_db
 from continuo.workers import registry
 
@@ -42,6 +44,49 @@ def test_sse_events_reach_owner_and_admins_only(fake):
         sent = events.publish("request.updated", {"id": 1}, 2)
         return sent, owner.queue.qsize(), other.queue.qsize(), admin.queue.qsize()
     assert asyncio.run(go()) == (2, 1, 0, 1)
+
+
+def _lidseeker_db(path):
+    c = sqlite3.connect(path)
+    c.executescript("""
+    CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, password_hash TEXT, role TEXT,
+                        created_at TEXT, token_version INTEGER DEFAULT 0);
+    CREATE TABLE requests (id INTEGER PRIMARY KEY, type TEXT, foreign_id TEXT, title TEXT,
+        artist TEXT, image_url TEXT, lidarr_artist_id INTEGER, lidarr_album_id INTEGER,
+        status TEXT, error TEXT, created_at TEXT, notified INTEGER, search_attempts INTEGER,
+        last_attempt_at TEXT, user_id INTEGER);
+    """)
+    c.execute("INSERT INTO users VALUES (1,'isaac','$2b$12$abcdefghijklmnopqrstuuMhTcRZ3xRaQdeEq9bb0o3lB0NhGKoJW','admin','2026-01-01',0)")
+    rows = [
+        (1, "album", "RG-AVAIL", "Owned", "A", None, 1, 11, "available", None),
+        (2, "album", "rg-failed", "Gave up", "B", None, 2, 12, "failed", None),
+        (3, "album", "rg-pending", "Pending", "C", None, 3, 13, "pending", None),
+        (4, "album", "rg-never", "Never added", "D", None, None, None, "pending", None),
+        (5, "album", "rg-error", "Errored", "E", None, None, None, "error", "boom"),
+        (6, "artist", "art-1", "Whole discography", None, None, 9, None, "pending", None),
+    ]
+    for r in rows:
+        c.execute("INSERT INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,'2026-02-01',1,0,NULL,1)", r)
+    c.commit()
+    c.close()
+
+
+def test_import_lidseeker(fake, tmp_path):
+    src = tmp_path / "lidseeker.db"
+    _lidseeker_db(src)
+    report = cli.import_lidseeker(str(src), match_available=False)
+    assert report == {"users_added": 1, "users_skipped": 0, "requests_added": 5,
+                      "requests_skipped": 0, "artist_requests_skipped": 1, "matched": 0}
+    by_rg = {r["mb_release_group_id"]: r for r in req_db.list_requests()}
+    assert by_rg["rg-avail"]["status"] == "available" and by_rg["rg-avail"]["notified_at"]
+    assert by_rg["rg-failed"]["status"] == "searching" and by_rg["rg-failed"]["still_looking"]
+    assert by_rg["rg-pending"]["status"] == "searching"
+    assert by_rg["rg-never"]["status"] == "pending"            # will be re-added
+    assert by_rg["rg-error"]["status"] == "error" and by_rg["rg-error"]["error"] == "boom"
+    assert users_db.get("isaac")["password_hash"].startswith("$2b$12$")
+    # Idempotent: a re-run at cut-over adds nothing.
+    again = cli.import_lidseeker(str(src), match_available=False)
+    assert again["requests_added"] == 0 and again["users_added"] == 0
 
 
 def test_policy_check_flags_upgrades_and_followers(client, fake):
@@ -91,6 +136,13 @@ def test_seed_admin_only_on_first_boot(fake, monkeypatch):
     assert users_db.get("root")["role"] == "admin"
     main.seed_admin()
     assert users_db.count() == 1
+
+
+def test_create_user_cli(fake, monkeypatch, capsys):
+    monkeypatch.setenv("CONTINUO_NEW_PASSWORD", "charlies-password")
+    assert cli.main(["create-user", "charlie", "--navidrome-username", "charlie-nd"]) == 0
+    u = users_db.get("charlie")
+    assert u["role"] == "user" and u["navidrome_username"] == "charlie-nd"
 
 
 def test_admin_user_management(client, fake):

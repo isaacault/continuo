@@ -44,3 +44,14 @@ def test_events_are_ordered(fake):
     req_db.add_event(row["id"], "two", None)
     assert [e["type"] for e in req_db.events(row["id"])] == ["one", "two"]
     assert req_db.events(row["id"])[0]["detail"] == {"n": 1}
+
+
+def test_backup_is_a_consistent_copy(fake, tmp_path):
+    import sqlite3
+
+    from continuo import cli
+    req_db.create(mb_release_group_id="rg-bk", title="Bk", artist="X", year=None,
+                  artwork_url=None, user_id=None)
+    dest = cli.backup(str(tmp_path / "bk" / "continuo.db"))
+    with sqlite3.connect(dest) as c:
+        assert c.execute("SELECT title FROM requests").fetchone()[0] == "Bk"

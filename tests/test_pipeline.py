@@ -129,9 +129,9 @@ def test_progress_resets_cycles(fake, monkeypatch):
     assert got["still_looking"] is False and got["last_source"] == "torrent"
 
 
-def test_status_loop_marks_complete_album_available(fake):
+def test_status_loop_hands_complete_album_to_scanning(fake):
     _album(fake, files=23)
     row = _row()
     run(status.update_one(row, {}))
     got = req_db.get(row["id"])
-    assert got["status"] == "available" and got["available_at"]
+    assert got["status"] == "scanning" and got["scan_started_at"]

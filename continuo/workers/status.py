@@ -1,7 +1,7 @@
 # Portions derived from lidseeker (https://github.com/IvoryCobra-VC/lidseeker), MIT License.
 """Status loop (every STATUS_POLL_SECONDS): refresh each live request's pipeline, store the status
-it implies, count fruitless search cycles (display-only `stillLooking`, never a give-up), mark
-fully-downloaded albums available, and push SSE whenever the pipeline changes — not
+it implies, count fruitless search cycles (display-only `stillLooking`, never a give-up), hand
+fully-downloaded albums to the scan watcher, and push SSE whenever the pipeline changes — not
 only the status."""
 import hashlib
 import json
@@ -12,6 +12,7 @@ from ..db import requests as req_db
 from ..db.conn import now, seconds_since
 from ..requests import orchestrate, pipeline
 from ..upstream import lidarr
+from . import scan
 
 log = logging.getLogger("continuo")
 
@@ -48,10 +49,8 @@ async def update_one(row: dict, queue_index: dict) -> dict:
     p = await pipeline.compute(row, queue_index)
     fields: dict = {}
     if p["stage"] == "scanning":
-        # Until the scan watcher (Phase 3) confirms the album in Navidrome, Lidarr having every
-        # file counts as available.
-        fields.update(status="available", available_at=now())
-        req_db.add_event(row["id"], "status", {"from": row["status"], "to": "available"})
+        row = scan.enter_scanning(row, "lidarr_complete")
+        p = await pipeline.compute(row, queue_index)
     elif p["stage"] != "requested":
         new_status = pipeline.STAGE_STATUS[p["stage"]]
         if new_status != row["status"]:

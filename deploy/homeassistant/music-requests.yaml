@@ -1,0 +1,29 @@
+# Home Assistant automation: continuo request notifications → the phone, with a tap-to-play deep
+# link. Paste into automations.yaml (or the UI's YAML editor). continuo POSTs
+# {title, message, tag, kind, clickAction, username} to HA_WEBHOOK_URL =
+# http://192.168.0.101:8123/api/webhook/<webhook_id>.
+#
+# Separate from the torrent-cleanup/host alert webhook so these land on their own Android
+# channel ("Music requests"), and `tag` makes a later update replace the earlier one.
+# Map more household members by adding `choose` branches on trigger.json.username.
+alias: "Music requests → phone"
+description: "continuo: album ready to play / needs a look"
+mode: queued
+trigger:
+  - platform: webhook
+    webhook_id: "REPLACE-WITH-A-LONG-RANDOM-ID"
+    allowed_methods: [POST]
+    local_only: true
+action:
+  - service: notify.mobile_app_REPLACE_PHONE
+    data:
+      title: "{{ trigger.json.title }}"
+      message: "{{ trigger.json.message }}"
+      data:
+        channel: "Music requests"
+        tag: "{{ trigger.json.tag }}"
+        group: "music-requests"
+        # Polyphony deep link, e.g. polyphony://album/music-api.ault.me/<navidromeAlbumId>.
+        # If the companion app refuses a bare custom scheme, use the intent form instead:
+        #   intent://album/music-api.ault.me/<id>#Intent;scheme=polyphony;package=app.polyphony;end
+        clickAction: "{{ trigger.json.clickAction if trigger.json.clickAction else 'noAction' }}"

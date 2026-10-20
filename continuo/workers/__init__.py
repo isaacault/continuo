@@ -2,7 +2,7 @@
 import asyncio
 
 from .. import config
-from . import heartbeat, reconcile, registry, status
+from . import heartbeat, reconcile, registry, scan, status
 
 
 def start() -> list[asyncio.Task]:
@@ -10,6 +10,7 @@ def start() -> list[asyncio.Task]:
     loops = {
         "status": (lambda: config.settings.status_poll_seconds, status.tick),
         "reconcile": (lambda: config.settings.reconcile_poll_seconds, reconcile.tick),
+        "scan": (lambda: config.settings.scan_poll_seconds, scan.tick),
         "heartbeat": (lambda: config.settings.heartbeat_seconds, heartbeat.beat),
         "nightly": (lambda: 600, heartbeat.nightly),
     }

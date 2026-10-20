@@ -76,7 +76,7 @@ def fake(monkeypatch, tmp_path):
     from continuo.requests import pipeline
     from continuo.search import merge
     from continuo.upstream import lidarr, slskd
-    from continuo.workers import registry, status
+    from continuo.workers import registry, scan, status
     migrate.run()
     facade.invalidate_all()
     lidarr._album_cache.clear()
@@ -84,6 +84,7 @@ def fake(monkeypatch, tmp_path):
     pipeline._progress.clear()
     status._last_hash.clear()
     slskd._transfers_cache = (0.0, None)
+    scan._state.update({"last_scan_seen": None, "scan_requested_at": 0.0, "scanning": False})
     registry.reset()
     events._subscribers.clear()
     from continuo import ratelimit
