@@ -70,13 +70,25 @@ def fake(monkeypatch, tmp_path):
     config.reload(env)
     f = FakeUpstream()
     http.use_transport(httpx.MockTransport(f))
+    from continuo import events
+    from continuo.auth import facade
     from continuo.db import migrate
+    from continuo.requests import pipeline
+    from continuo.search import merge
     from continuo.upstream import lidarr, slskd
-    from continuo.workers import registry
+    from continuo.workers import registry, status
     migrate.run()
+    facade.invalidate_all()
     lidarr._album_cache.clear()
+    merge._catalog_cache.clear()
+    pipeline._progress.clear()
+    status._last_hash.clear()
     slskd._transfers_cache = (0.0, None)
     registry.reset()
+    events._subscribers.clear()
+    from continuo import ratelimit
+    for lim in (ratelimit.login_limiter, ratelimit.search_limiter, ratelimit.catalog_limiter):
+        lim._hits.clear()
     yield f
     http.use_transport(None)
 
@@ -88,6 +100,23 @@ def client(fake):
     from continuo.main import create_app
     with TestClient(create_app(disable_workers=True)) as c:
         yield c
+
+
+def make_user(username="isaac", password="correct-horse", role="admin", navidrome=None):
+    from continuo.auth import passwords
+    from continuo.db import users
+    return users.create(username, passwords.hash_password(password), role, navidrome)
+
+
+def login(client, username="isaac", password="correct-horse", device="Pixel 9"):
+    r = client.post("/v1/auth/login", json={"username": username, "password": password,
+                                            "device": {"name": device, "platform": "android"}})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def bearer(session) -> dict:
+    return {"Authorization": f"Bearer {session['accessToken']}"}
 
 
 def run(coro):

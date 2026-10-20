@@ -2,13 +2,16 @@
 import asyncio
 
 from .. import config
-from . import heartbeat, registry
+from . import heartbeat, reconcile, registry, status
 
 
 def start() -> list[asyncio.Task]:
     # Intervals are read each iteration, so a config.reload() (tests) takes effect.
     loops = {
+        "status": (lambda: config.settings.status_poll_seconds, status.tick),
+        "reconcile": (lambda: config.settings.reconcile_poll_seconds, reconcile.tick),
         "heartbeat": (lambda: config.settings.heartbeat_seconds, heartbeat.beat),
+        "nightly": (lambda: 600, heartbeat.nightly),
     }
     tasks = []
     for name, (interval, body) in loops.items():
