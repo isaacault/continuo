@@ -1,7 +1,7 @@
 # ── music-api.ault.me: continuo (private: LAN + tailnet only) ─────────────────────────────────
-# Phase 0/1: everything to continuo, except the façade's auth check, which only Caddy itself may
-# call (it would otherwise be a credential-checking oracle). continuo has no published port; Caddy
-# reaches it on the compose network.
+# Everything to continuo, except /rest/* (the façade, to Navidrome) and the façade's auth check,
+# which only Caddy itself may call (it would otherwise be a credential-checking oracle). continuo has
+# no published port; Caddy reaches it on the compose network, Navidrome on music-auth.
 music-api.ault.me {
 	import private
 
@@ -10,19 +10,20 @@ music-api.ault.me {
 		respond 404
 	}
 
-	# Phase 2 — the Subsonic façade. Uncomment once Navidrome trusts the music-auth network
-	# (ND_EXTAUTH_TRUSTEDSOURCES) and continuo runs with NAVIDROME_AUTH=header.
-	# Any client-sent Remote-User is dropped first; forward_auth then sets it from continuo's
-	# answer (and removes it if continuo didn't send one). Audio flows Navidrome → Caddy →
-	# device; continuo only sees the auth subrequest.
-	# handle /rest/* {
-	# 	request_header -Remote-User
-	# 	forward_auth continuo:8080 {
-	# 		uri /internal/auth/subsonic
-	# 		copy_headers Remote-User
-	# 	}
-	# 	reverse_proxy navidrome-trusted:4533
-	# }
+	# The Subsonic façade. Any client-sent Remote-User is dropped first; forward_auth then sets it from
+	# continuo's answer. Audio flows Navidrome → Caddy → device; continuo only sees the auth subrequest.
+	# `route` keeps this order: Caddy's default directive order runs request_header AFTER forward_auth,
+	# which would strip the Remote-User forward_auth just set (found on the first deploy).
+	handle /rest/* {
+		route {
+			request_header -Remote-User
+			forward_auth continuo:8080 {
+				uri /internal/auth/subsonic
+				copy_headers Remote-User
+			}
+			reverse_proxy navidrome-trusted:4533
+		}
+	}
 
 	handle {
 		reverse_proxy continuo:8080

@@ -3,16 +3,20 @@
 # Talks to Lidarr/slskd APIs only; every download still originates from Lidarr/qBittorrent/slskd
 # inside gluetun. Never touches the music files. Secrets in .env, decrypted from
 # secrets/continuo.env (JWT_SECRET, LIDARR_API_KEY, LIDARR_WEBHOOK_SECRET, SLSKD_API_KEY,
-# HA_WEBHOOK_URL, UPTIME_KUMA_PUSH_URL, ADMIN_PASSWORD, NAVIDROME_SERVICE_PASSWORD until Phase 2).
+# HA_WEBHOOK_URL, UPTIME_KUMA_PUSH_URL, ADMIN_PASSWORD; NAVIDROME_SERVICE_PASSWORD is only used if
+# NAVIDROME_AUTH is set back to "password").
 services:
   continuo:
-    image: ghcr.io/isaacault/continuo:edge     # pin a version tag + digest once CI publishes one
+    image: ghcr.io/isaacault/continuo:edge     # built locally on the Jetson for now (docker build in the continuo
+                                               # repo); pin a version tag + digest once CI publishes one
+    pull_policy: never                         # not on ghcr yet — keeps `make pull/update` from failing on it
     container_name: continuo
     profiles: ["media", "all"]
     restart: unless-stopped
     user: "${PUID}:${PGID}"
     env_file:
-      - .env
+      - path: .env
+        required: false                       # so a missing .env never breaks `make` for other services
     environment:
       TZ: Europe/London
       PUBLIC_BASE_URL: https://music-api.ault.me
@@ -22,13 +26,14 @@ services:
       ROOT_FOLDER_PATH: /data/music           # Lidarr's root folder (as Lidarr sees it)
       QUALITY_PROFILE_ID: "4"                 # FLAC (MP3 Fallback) — same as lidseeker
       METADATA_PROFILE_ID: "1"                # Standard
-      # Phase 1: password auth as the continuo-svc Navidrome user. Phase 2 switches to
-      # NAVIDROME_AUTH=header over the music-auth network (see the Phase 2 block below).
-      NAVIDROME_URL: http://navidrome:4533
+      # Navidrome trusts continuo's music-auth address: calls carry Remote-User (the requesting
+      # user for searches, continuo-svc otherwise) and continuo needs no Navidrome password.
+      NAVIDROME_URL: http://navidrome-trusted:4533
       NAVIDROME_MUSIC_ROOT: /music
-      NAVIDROME_AUTH: password
+      NAVIDROME_AUTH: header
       NAVIDROME_SERVICE_USER: continuo-svc
-      ADMIN_USER: isaac                       # first boot only (password in .env)
+      ADMIN_USER: admin                       # first boot only (password in .env); listen as your own
+                                              # user: `continuo create-user isaac` (→ Navidrome user isaac)
       MUSICBRAINZ_CONTACT: https://github.com/isaacault/continuo
       DOCKER_PROXY_URL: http://continuo-docker-proxy:2375
       SOULARR_CONFIG_PATH: /soularr/config.ini
@@ -38,6 +43,10 @@ services:
       - /ssd/appdata/continuo:/data           # SQLite (backed up via `continuo backup`, see backup/)
       - /ssd/appdata/soularr:/soularr         # Soularr config.ini (quality toggle) + denylist (Retry)
     # No published port: only Caddy (and Lidarr's webhook, via Caddy) talk to it.
+    networks:
+      default: {}
+      music-auth:
+        ipv4_address: 172.30.42.3
     mem_limit: 256m
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/v1/health').status==200 else 1)"]
@@ -58,21 +67,12 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     mem_limit: 32m
 
-# --- Phase 2 (the Subsonic façade) -----------------------------------------------------------
-# Navidrome trusts Remote-User only from ND_EXTAUTH_TRUSTEDSOURCES. Rather than trusting the
-# whole compose network (every container), Caddy, continuo and Navidrome share a tiny network
-# with fixed addresses, and only Caddy's and continuo's are trusted:
-#
-#   networks:
-#     music-auth:
-#       ipam:
-#         config:
-#           - subnet: 172.30.42.0/29
-#
-#   continuo:  networks: { default: {}, music-auth: { ipv4_address: 172.30.42.3 } }
-#              environment: NAVIDROME_AUTH=header, NAVIDROME_URL=http://navidrome-trusted:4533
-#   caddy:     networks: { default: {}, music-auth: { ipv4_address: 172.30.42.2 } }
-#   navidrome: networks: { default: {}, music-auth: { ipv4_address: 172.30.42.4,
-#                                                      aliases: [navidrome-trusted] } }
-#              environment: ND_EXTAUTH_TRUSTEDSOURCES=172.30.42.2/32,172.30.42.3/32
-#                           ND_EXTAUTH_USERHEADER=Remote-User
+# The Subsonic façade's trust network. Navidrome trusts Remote-User only from Caddy (.2) and continuo (.3) —
+# ND_EXTAUTH_TRUSTEDSOURCES in apps/navidrome.yaml — instead of from every container on the compose network.
+networks:
+  music-auth:
+    name: music-auth
+    internal: true                  # container-to-container only: never anyone's route out
+    ipam:
+      config:
+        - subnet: 172.30.42.0/29

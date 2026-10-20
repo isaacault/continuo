@@ -76,8 +76,15 @@ container → Uptime Kuma → ntfy outage alert.
    `ND_EXTAUTH_USERHEADER=Remote-User`. Recreate navidrome + caddy (brief playback blip).
 3. continuo: `NAVIDROME_AUTH=header`, `NAVIDROME_URL=http://navidrome-trusted:4533`; drop
    `NAVIDROME_SERVICE_PASSWORD`.
-4. Caddy: uncomment the `/rest/*` handle and add `request_header -Remote-User` to both
-   `music.ault.me` blocks. Reload.
+4. Caddy: add the `/rest/*` handle from the snippet — inside `route { }`, because Caddy's default
+   directive order runs `request_header` *after* `forward_auth` and would strip the user it just
+   set — and `request_header -Remote-User` to both `music.ault.me` blocks. Reload.
+
+Deployed 2026-10-20 (homelab `128155c`, `route` fix `096dc46`): verified that a forged
+`Remote-User` is ignored on the public and private `music.ault.me` and on `:4533`; a façade
+credential maps to the right Navidrome user even with a forged header; a 25 MB FLAC streamed with
+continuo sending ~300 bytes (the auth answer); stars land on the mapped user; a revoked device is
+refused.
 
 Verify:
 
