@@ -13,7 +13,7 @@ from .db import migrate
 from .db import users as users_db
 from .requests import orchestrate
 from .upstream import http
-from .workers import index
+from .workers import heartbeat, index
 
 log = logging.getLogger("continuo")
 
@@ -60,6 +60,7 @@ async def _startup_checks() -> None:
                 log.warning("policy check %s: %s — %s", c["name"], c["status"], c["message"])
     except Exception:  # noqa: BLE001
         log.exception("startup policy check failed")
+    heartbeat.mark_nightly_done()   # this was today's index + policy check; don't repeat it
 
 
 @asynccontextmanager

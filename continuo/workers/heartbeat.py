@@ -28,6 +28,14 @@ async def beat() -> None:
 _last_nightly: str | None = None
 
 
+def mark_nightly_done() -> None:
+    """Startup already refreshed the index and ran the policy check; skip today's nightly run
+    if the hour has already passed."""
+    global _last_nightly
+    if datetime.now().hour >= config.settings.library_index_hour:
+        _last_nightly = datetime.now().date().isoformat()
+
+
 async def nightly() -> None:
     """Runs once per local day at/after LIBRARY_INDEX_HOUR."""
     global _last_nightly
