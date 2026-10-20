@@ -1,3 +1,5 @@
+import hashlib
+
 from conftest import bearer, login, make_user
 
 
@@ -76,3 +78,58 @@ def test_admin_only_routes(client):
     make_user("charlie", role="user")
     s = login(client, "charlie")
     assert client.get("/v1/admin/users", headers=bearer(s)).status_code == 403
+
+
+# --- façade (Caddy forward_auth) ------------------------------------------------------------
+def _fwd(client, query: str):
+    return client.get("/internal/auth/subsonic",
+                      headers={"X-Forwarded-Uri": f"/rest/stream.view?{query}",
+                               "X-Forwarded-Method": "GET"})
+
+
+def test_facade_token_auth_maps_to_navidrome_user(client):
+    make_user(navidrome="isaac-nd")
+    s = login(client)
+    secret = s["library"]["password"]
+    t = hashlib.md5((secret + "abc123").encode()).hexdigest()
+    r = _fwd(client, f"u=isaac&t={t}&s=abc123&v=1.16.1&c=polyphony&id=xyz")
+    assert r.status_code == 200
+    assert r.headers["Remote-User"] == "isaac-nd"
+    assert r.headers["X-Continuo-Device"] == s["device"]["id"]
+
+
+def test_facade_plain_and_enc_password(client):
+    make_user()
+    secret = login(client)["library"]["password"]
+    assert _fwd(client, f"u=isaac&p={secret}").status_code == 200
+    assert _fwd(client, f"u=isaac&p=enc:{secret.encode().hex()}").status_code == 200
+
+
+def test_facade_rejects_with_subsonic_error(client):
+    make_user()
+    login(client)
+    r = _fwd(client, "u=isaac&t=deadbeef&s=x&f=json")
+    assert r.status_code == 401
+    assert r.json()["subsonic-response"]["error"]["code"] == 40
+    assert "Remote-User" not in r.headers
+    r = _fwd(client, "t=deadbeef&s=x")
+    assert r.status_code == 401 and b'code="10"' in r.content
+    # The user's real password is NOT a façade credential.
+    assert _fwd(client, "u=isaac&p=correct-horse").status_code == 401
+
+
+def test_facade_revocation_is_immediate(client):
+    make_user()
+    s = login(client)
+    secret = s["library"]["password"]
+    assert _fwd(client, f"u=isaac&p={secret}").status_code == 200     # warms the cache
+    client.delete(f"/v1/devices/{s['device']['id']}", headers=bearer(s))
+    assert _fwd(client, f"u=isaac&p={secret}").status_code == 401
+
+
+def test_facade_secret_is_per_user(client):
+    make_user()
+    make_user("charlie", role="user")
+    isaac_secret = login(client)["library"]["password"]
+    login(client, "charlie")
+    assert _fwd(client, f"u=charlie&p={isaac_secret}").status_code == 401
