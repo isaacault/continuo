@@ -45,6 +45,10 @@ async def subsonic_forward_auth(request: Request) -> Response:
     uri = request.headers.get("x-forwarded-uri") or ""
     params = {k: v[-1] for k, v in parse_qs(urlsplit(uri).query, keep_blank_values=True).items()}
     if not params.get("u"):
+        if (request.headers.get("x-forwarded-method") or "").upper() == "POST":
+            # forward_auth never sees a body: a formPost client that ignored the façade's
+            # getOpenSubsonicExtensions answer (continuo withholds formPost, issue #4).
+            log.info("façade: POST %s without query credentials (formPost?)", urlsplit(uri).path)
         return _subsonic_error(params, 10, "Required parameter is missing: u")
     ident = facade.verify(params)
     if ident is None:

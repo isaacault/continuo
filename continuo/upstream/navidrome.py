@@ -68,6 +68,19 @@ async def subsonic(endpoint: str, params: Optional[dict] = None,
     return body
 
 
+async def open_subsonic_extensions() -> dict:
+    """Navidrome's getOpenSubsonicExtensions answer (the inner subsonic-response), fetched
+    without credentials: the endpoint is public by spec, and the façade's copy must not depend
+    on any user. Raises httpx.HTTPError / ValueError when Navidrome can't answer."""
+    r = await _client().get("/rest/getOpenSubsonicExtensions",
+                            params={"v": _API_VERSION, "c": _CLIENT_NAME, "f": "json"})
+    r.raise_for_status()
+    body = r.json().get("subsonic-response")
+    if not isinstance(body, dict):
+        raise ValueError("no subsonic-response in Navidrome's answer")
+    return body
+
+
 async def search3(query: str, as_user: Optional[str], *, artists: int = 10, albums: int = 20,
                   songs: int = 20) -> dict:
     body = await subsonic("search3", {
