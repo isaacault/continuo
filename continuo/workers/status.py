@@ -45,6 +45,26 @@ def count_search_cycle(row: dict, p: dict) -> dict:
     return fields
 
 
+def latency_milestones(row: dict, p: dict) -> dict:
+    """The first time a request is seen downloading, and the first time any audio file is
+    complete (a Soulseek file done, or a track imported by Lidarr). Set once, never moved."""
+    fields: dict = {}
+    source = p.get("source") or row.get("last_source")
+    started = p["stage"] in ("downloading", "importing", "scanning", "available")
+    first_file = ((p.get("trackFiles") or 0) > 0
+                  or ((p.get("download") or {}).get("filesDone") or 0) > 0
+                  or p["stage"] in ("scanning", "available"))
+    if started and not row.get("download_started_at"):
+        fields["download_started_at"] = now()
+    if first_file and not row.get("first_file_at"):
+        fields["first_file_at"] = now()
+        if not fields.get("download_started_at") and not row.get("download_started_at"):
+            fields["download_started_at"] = fields["first_file_at"]
+    if (fields or started) and source and not row.get("first_source"):
+        fields["first_source"] = source
+    return fields
+
+
 async def update_one(row: dict, queue_index: dict) -> dict:
     p = await pipeline.compute(row, queue_index)
     fields: dict = {}
@@ -60,6 +80,7 @@ async def update_one(row: dict, queue_index: dict) -> dict:
     if p.get("source") and p["source"] != row.get("last_source"):
         fields["last_source"] = p["source"]
     fields.update(count_search_cycle(row, p))
+    fields.update(latency_milestones(row, p))
     if fields.get("still_looking"):
         req_db.add_event(row["id"], "still_looking", {"cycles": fields["search_cycles"]})
     if fields:

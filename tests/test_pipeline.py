@@ -135,3 +135,48 @@ def test_status_loop_hands_complete_album_to_scanning(fake):
     run(status.update_one(row, {}))
     got = req_db.get(row["id"])
     assert got["status"] == "scanning" and got["scan_started_at"]
+
+
+def test_latency_milestones_soulseek(fake, monkeypatch):
+    """First transfer → download_started_at; first finished Soulseek file → first_file_at."""
+    _album(fake)
+    row = _row()
+    downloading = pipeline.build("downloading", source="soulseek", download={"filesDone": 0}, row=row)
+    first = status.latency_milestones(row, downloading)
+    assert set(first) == {"download_started_at", "first_source"} and first["first_source"] == "soulseek"
+    row = req_db.update(row["id"], **first)
+    assert status.latency_milestones(row, downloading) == {}          # set once
+    one_done = pipeline.build("downloading", source="soulseek", download={"filesDone": 1}, row=row)
+    second = status.latency_milestones(row, one_done)
+    assert set(second) == {"first_file_at"}
+    row = req_db.update(row["id"], **second)
+    assert status.latency_milestones(row, one_done) == {}
+
+
+def test_latency_first_file_implies_download_started(fake):
+    _album(fake)
+    row = _row()
+    imported = pipeline.build("importing", files=3, total=12, source="torrent", row=row)
+    got = status.latency_milestones(row, imported)
+    assert got["download_started_at"] == got["first_file_at"] and got["first_source"] == "torrent"
+
+
+def test_latency_report_medians():
+    from continuo.api.admin import latency_report
+    rows = [
+        {"first_source": "soulseek", "created_at": "2026-10-20T17:37:27+00:00",
+         "download_started_at": "2026-10-20T17:43:36+00:00", "first_file_at": "2026-10-20T17:45:19+00:00",
+         "available_at": "2026-10-20T18:02:51+00:00"},
+        {"first_source": "soulseek", "created_at": "2026-10-21T10:00:00+00:00",
+         "download_started_at": "2026-10-21T10:01:00+00:00", "first_file_at": None, "available_at": None},
+        {"first_source": "torrent", "created_at": "2026-10-21T10:00:00+00:00",
+         "download_started_at": "2026-10-21T10:00:30+00:00", "first_file_at": "2026-10-21T10:20:30+00:00",
+         "available_at": "2026-10-21T10:22:00+00:00"},
+    ]
+    rep = latency_report(rows)
+    s = rep["soulseek"]
+    assert s["requests"] == 2
+    assert s["toDownloadStart"] == {"n": 2, "median": 214.5, "p90": 338.1}   # 60 s and 369 s
+    assert s["toFirstFile"] == {"n": 1, "median": 472.0, "p90": 472.0}
+    assert rep["torrent"]["downloadToFirstFile"]["median"] == 1200.0
+    assert rep["all"]["requests"] == 3

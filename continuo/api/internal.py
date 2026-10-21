@@ -121,6 +121,9 @@ async def _on_grab(payload: dict, rows: list[dict]) -> None:
         req_db.add_event(row["id"], "webhook_grab", {
             "release": release.get("releasetitle"), "indexer": release.get("indexer"),
             "client": payload.get("downloadclient")})
+        if not row.get("download_started_at"):
+            req_db.update(row["id"], download_started_at=now(),
+                          first_source=row.get("first_source") or _source(payload))
         if row["status"] in ("pending", "searching"):
             updated = req_db.update(row["id"], status="downloading", last_source=_source(payload),
                                     search_cycles=0, still_looking=False)

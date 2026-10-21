@@ -1,8 +1,9 @@
 """Admin: policy check, stats, users, settings (PLAN.md §3.5)."""
 import logging
+from datetime import datetime, timedelta, timezone
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from .. import config
 from ..auth import facade, passwords
@@ -12,6 +13,7 @@ from ..db import library as lib_db
 from ..db import requests as req_db
 from ..db import settings as settings_db
 from ..db import users as users_db
+from ..db.conn import parse_ts
 from ..errors import ApiError
 from ..upstream import lidarr, navidrome, soularr
 from ..workers import index
@@ -104,6 +106,61 @@ async def get_policy_check(_admin: CurrentUser = Depends(require_admin)) -> dict
 @router.post("/library/refresh")
 async def refresh_library(_admin: CurrentUser = Depends(require_admin)) -> dict:
     return await index.refresh()
+
+
+_LATENCY_STEPS = (
+    ("toDownloadStart", "created_at", "download_started_at"),
+    ("toFirstFile", "created_at", "first_file_at"),
+    ("toAvailable", "created_at", "available_at"),
+    ("downloadToFirstFile", "download_started_at", "first_file_at"),
+)
+
+
+def _seconds(a: str | None, b: str | None) -> float | None:
+    ta, tb = parse_ts(a), parse_ts(b)
+    if ta is None or tb is None:
+        return None
+    return max(0.0, (tb - ta).total_seconds())
+
+
+def _percentile(values: list[float], q: float) -> float:
+    ordered = sorted(values)
+    k = (len(ordered) - 1) * q
+    lo, hi = int(k), min(int(k) + 1, len(ordered) - 1)
+    return round(ordered[lo] + (ordered[hi] - ordered[lo]) * (k - lo), 1)
+
+
+def latency_report(rows: list[dict]) -> dict:
+    """Median and p90 seconds per source for each step from request to playable (issue #10)."""
+    by_source: dict[str, list[dict]] = {}
+    for r in rows:
+        by_source.setdefault(r.get("first_source") or r.get("last_source") or "unknown", []).append(r)
+    by_source["all"] = rows
+
+    def summary(group: list[dict]) -> dict:
+        out = {"requests": len(group)}
+        for name, start, end in _LATENCY_STEPS:
+            values = [v for v in (_seconds(r.get(start), r.get(end)) for r in group) if v is not None]
+            out[name] = ({"n": len(values), "median": _percentile(values, 0.5),
+                          "p90": _percentile(values, 0.9)} if values else {"n": 0})
+        return out
+
+    return {name: summary(group) for name, group in by_source.items()}
+
+
+@router.get("/latency")
+async def latency(days: int = Query(30, ge=1, le=365),
+                  _admin: CurrentUser = Depends(require_admin)) -> dict:
+    """How long requests take to become playable, per source — the evidence for designing
+    "play now" (issue #10). Seconds; first file = first complete audio file anywhere."""
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    rows = req_db.latency_rows(since)
+    recent = [{
+        "id": r["id"], "title": r["title"], "artist": r["artist"], "status": r["status"],
+        "source": r.get("first_source") or r.get("last_source"),
+        **{name: _seconds(r.get(start), r.get(end)) for name, start, end in _LATENCY_STEPS},
+    } for r in rows[:50]]
+    return {"days": days, "bySource": latency_report(rows), "recent": recent}
 
 
 @router.get("/stats")

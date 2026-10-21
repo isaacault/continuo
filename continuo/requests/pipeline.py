@@ -137,7 +137,8 @@ async def compute(row: dict, queue_index: Optional[dict[int, dict]] = None) -> d
             "downloading", percent=prog["percent"], files=files, total=total, source="soulseek",
             detail=f"Downloading from Soulseek — {prog['filesDone']}/{prog['filesTotal']} files"
                    + (f" from {prog['username']}" if prog.get("username") else ""),
-            download={"client": "slskd", "sizeLeft": None, "timeLeft": None, "stalled": False},
+            download={"client": "slskd", "sizeLeft": None, "timeLeft": None, "stalled": False,
+                      "filesDone": prog["filesDone"], "filesTotal": prog["filesTotal"]},
             row=row,
         )
 

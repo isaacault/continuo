@@ -175,6 +175,10 @@ def enter_scanning(row: dict, reason: str) -> dict:
     fields = {"status": "scanning", "still_looking": False, "search_cycles": 0}
     if not row.get("scan_started_at"):
         fields["scan_started_at"] = now()
+    # Every file is in, so any milestone not seen yet (missed between polls) happened by now.
+    for key in ("download_started_at", "first_file_at"):
+        if not row.get(key):
+            fields[key] = now()
     prev = row["status"]
     row = req_db.update(row["id"], **fields)
     req_db.add_event(row["id"], "status", {"from": prev, "to": "scanning", "by": reason})
