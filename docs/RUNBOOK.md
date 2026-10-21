@@ -164,3 +164,9 @@ docker exec continuo continuo refresh-library
 docker exec -it continuo continuo create-user charlie --navidrome-username charlie
 docker exec continuo continuo backup
 ```
+
+**Request latency** (issue #10, evidence for "play now"): `GET /v1/admin/latency?days=30` (admin
+token) gives median/p90 seconds per source for request → download start → first complete file →
+available in Navidrome, plus the recent requests. Milestones are recorded by the 45 s status loop
+and the Lidarr webhook; requests made before 0.2's migration were backfilled from the event log,
+where "first file" is only known as "all files in" (an upper bound).

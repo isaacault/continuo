@@ -10,6 +10,7 @@ _UPDATABLE = {
     "lidarr_release_id", "navidrome_album_id", "status", "still_looking", "search_cycles",
     "last_cycle_at", "last_search_at", "last_source", "import_paths", "imported_at",
     "scan_started_at", "attention", "error", "user_id", "available_at", "notified_at",
+    "download_started_at", "first_file_at", "first_source",
 }
 _JSON = {"import_paths", "attention"}
 
@@ -147,6 +148,16 @@ def delete_available(user_id: int | None = None) -> int:
         return c.execute(
             "DELETE FROM requests WHERE status='available' AND user_id=?", (user_id,)
         ).rowcount
+
+
+def latency_rows(since: str) -> list[dict]:
+    """Requests created since `since` with their latency milestones (issue #10)."""
+    with connect() as c:
+        return rows(c.execute(
+            "SELECT id, title, artist, status, created_at, download_started_at, first_file_at, "
+            "available_at, first_source, last_source FROM requests WHERE created_at >= ? "
+            "ORDER BY id DESC", (since,),
+        ))
 
 
 def stats() -> dict:

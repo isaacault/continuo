@@ -185,3 +185,33 @@ def test_root_and_unknown_paths(client):
     assert client.get("/").json()["health"] == "/v1/health"
     r = client.get("/nope")
     assert r.status_code == 404 and r.json()["error"]["code"] == "not_found"
+
+
+def test_latency_endpoint_and_migration_backfill(client, fake):
+    from continuo.db.conn import connect
+    from continuo.db.migrate import available
+    make_user()
+    s = login(client)
+    row = req_db.create(mb_release_group_id="rg-lat", title="Honeycomb", artist="Jitwam", year=2019,
+                        artwork_url=None, user_id=1, created_at="2026-10-20T17:37:27+00:00")
+    req_db.update(row["id"], status="available", available_at="2026-10-20T18:02:51+00:00",
+                  last_source="soulseek", download_started_at=None, first_file_at=None)
+    # Replay the 0002 backfill against an event log like Honeycomb's.
+    with connect() as c:
+        for at, to in (("2026-10-20T17:43:36+00:00", "downloading"),
+                       ("2026-10-20T18:00:53+00:00", "scanning")):
+            c.execute("INSERT INTO request_events (request_id, at, type, detail) VALUES (?,?,?,?)",
+                      (row["id"], at, "status", '{"to":"%s"}' % to))
+        sql = next(text for v, _n, text in available() if v == 2)
+        import re
+        code = re.sub(r"--[^\n]*", "", sql)          # the migration's comments, trailing ones too
+        for stmt in code.split(";"):
+            if stmt.strip().upper().startswith("UPDATE"):
+                c.execute(stmt)
+    got = req_db.get(row["id"])
+    assert got["download_started_at"] == "2026-10-20T17:43:36+00:00"
+    assert got["first_file_at"] == "2026-10-20T18:00:53+00:00"
+    assert got["first_source"] == "soulseek"
+    r = client.get("/v1/admin/latency?days=365", headers=bearer(s)).json()
+    assert r["bySource"]["soulseek"]["toDownloadStart"]["median"] == 369.0
+    assert r["recent"][0]["title"] == "Honeycomb" and r["recent"][0]["toAvailable"] == 1524.0
