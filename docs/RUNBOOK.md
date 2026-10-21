@@ -103,6 +103,55 @@ stars persist under *your* Navidrome user. Same in Cassette / Feishin. `DELETE /
 → the next stream is 401. `docker stats continuo` stays flat while streaming. Navidrome's web UI
 on `music.ault.me` still works with passwords. Cast/DLNA still play.
 
+**Clients that send credentials in the body** (issue #4, decided 2026-10-21). forward_auth
+passes only the request line and headers to continuo, never the body, so a client using the
+OpenSubsonic `formPost` extension (POST with `u`/`t`/`s` in an `x-www-form-urlencoded` body) got
+error 10 even with a valid app password. Navidrome 0.64 advertises `formPost`, and Feishin switches
+to POST exactly when it's advertised. Fix: continuo answers `getOpenSubsonicExtensions` on
+`music-api.ault.me` itself, with Navidrome's list minus `formPost` and `apiKeyAuthentication`
+(Navidrome's master branch adds it; an `apiKey` isn't a façade credential either), so compliant
+clients stay on query-string auth. continuo asks Navidrome for the list on each call (no
+credentials, no `Remote-User`) and returns it as XML, JSON or JSONP, whichever the client asked
+for; if Navidrome is down it answers with a Subsonic error (HTTP 502). It fetches the list rather
+than hard-coding it, so other extensions (`transcodeOffset`, `songLyrics`, `sonicSimilarity` when
+configured, …) stay correct across Navidrome upgrades. The route is **unauthenticated**, as the
+spec requires ("must be publicly accessible"); Navidrome serves it without auth too. It reveals
+no more than Navidrome's own public answer, and continuo never forwards or logs the client's
+parameters. Rejected: accepting credentials in a header (no Subsonic client sends
+them there, so it fixes nothing); sending POST `/rest/*` through continuo so it can read the
+body (audio would then pass through continuo, against the 256 MB budget and the design); a Caddy
+plugin that copies the body into headers (custom Caddy build). A client that POSTs without
+checking the list still fails. forward_auth logs `POST … without query credentials (formPost?)`
+for that case.
+
+Deploy a continuo image that has the route **first**: older images answer this path with a 404.
+Then make the Caddy change, in the `music-api.ault.me` block, **above** `handle /rest/*` (as in the
+snippet):
+
+```caddyfile
+	handle /rest/getOpenSubsonicExtensions* {
+		reverse_proxy continuo:8080
+	}
+```
+
+It has a single directive, so it needs no `route { }`. If a second directive is ever added
+(e.g. `request_header`), wrap them in `route { }`, the same lesson as the façade block. Caddy
+tries `handle` blocks with a longer path first, so it wins over `/rest/*` wherever it sits, but
+keep it above so the file reads in the order Caddy applies it. The `*` also covers the `.view`
+form. Reload, then:
+
+```bash
+# formPost (and apiKeyAuthentication) gone, the rest of Navidrome's list intact, no credentials:
+curl -s 'https://music-api.ault.me/rest/getOpenSubsonicExtensions?f=json' \
+  | jq -c '."subsonic-response" | [.type, .serverVersion, [.openSubsonicExtensions[].name]]'
+# every other endpoint still needs a façade credential:
+curl -s -o /dev/null -w '%{http_code}\n' 'https://music-api.ault.me/rest/ping?v=1.16.1&c=x'   # 401
+```
+
+Then Feishin: it reads the extension list when it connects to the server. If it still POSTs
+(look for the forward_auth log line above), remove and re-add the server. It should sign in,
+browse and play.
+
 ## Phase 3 — closing the loop
 
 1. **Lidarr** → Settings → Connect → Webhook: URL

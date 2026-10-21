@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from . import __version__, config, errors, ratelimit, workers
-from .api import admin, artwork, auth, health, internal, notifications, requests, search
+from .api import admin, artwork, auth, health, internal, notifications, requests, search, subsonic
 from .auth import passwords
 from .db import migrate
 from .db import users as users_db
@@ -97,7 +97,8 @@ def create_app(*, disable_workers: bool = False) -> FastAPI:
         return response
 
     for r in (health.router, auth.router, search.router, requests.router,
-              notifications.router, admin.router, internal.router, artwork.router):
+              notifications.router, admin.router, internal.router, artwork.router,
+              subsonic.router):
         app.include_router(r)
     return app
 

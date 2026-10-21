@@ -1,13 +1,24 @@
 # ── music-api.ault.me: continuo (private: LAN + tailnet only) ─────────────────────────────────
-# Everything to continuo, except /rest/* (the façade, to Navidrome) and the façade's auth check,
-# which only Caddy itself may call (it would otherwise be a credential-checking oracle). continuo has
-# no published port; Caddy reaches it on the compose network, Navidrome on music-auth.
+# Everything to continuo, except /rest/* (the façade, to Navidrome; continuo itself answers
+# getOpenSubsonicExtensions) and the façade's auth check, which only Caddy itself may call (it
+# would otherwise be a credential-checking oracle). continuo has no published port; Caddy reaches it on the compose network, Navidrome on music-auth.
 music-api.ault.me {
 	import private
 
 	@facade_auth path /internal/auth/*
 	handle @facade_auth {
 		respond 404
+	}
+
+	# OpenSubsonic discovery, answered by continuo: Navidrome's extension list minus formPost (and
+	# apiKeyAuthentication), because forward_auth never sees a request body, so clients must keep
+	# their credentials in the query string (issue #4). No forward_auth: the spec requires this one
+	# endpoint to be public, and continuo neither checks nor forwards credentials here. One
+	# directive, so no `route`; if you ever add a second (e.g. request_header), wrap them in
+	# `route { }` like the façade below. Caddy tries `handle` blocks with longer paths first, but
+	# keep it above /rest/* so the file reads in the order Caddy applies it.
+	handle /rest/getOpenSubsonicExtensions* {
+		reverse_proxy continuo:8080
 	}
 
 	# The Subsonic façade. Any client-sent Remote-User is dropped first; forward_auth then sets it from
