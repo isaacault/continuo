@@ -10,9 +10,11 @@ always-running service that underpins the client.
 
 ## Status
 
-Backend for plan Phases 0–3 is implemented and tested against mocked upstreams; not yet
-deployed. Design: **[PLAN.md](PLAN.md)**. Deploying and verifying each phase on the Jetson:
-**[docs/RUNBOOK.md](docs/RUNBOOK.md)**.
+Phases 0–3 are deployed on the homelab Jetson for testing, alongside Lidseeker: search and
+requests (`/v1`), the Subsonic façade at `music-api.ault.me/rest`, the Lidarr webhook, Navidrome
+matching and Home Assistant "ready to play" notifications. Polyphony's sign-in and requests UI are
+in progress. Design: **[PLAN.md](PLAN.md)**. Deploying, verifying and operating each phase:
+**[docs/RUNBOOK.md](docs/RUNBOOK.md)**. Working rules: **[CLAUDE.md](CLAUDE.md)**.
 
 ## Shape
 
