@@ -9,16 +9,25 @@ def _decode(r: dict | None) -> dict | None:
 
 
 def create(*, user_id: int, type: str, title: str, body: str | None,
-           action: dict | None = None, request_id: int | None = None) -> dict:
+           action: dict | None = None, request_id: int | None = None,
+           delivered_via: list[str] | None = None) -> dict:
+    """delivered_via: channels that already delivered it, recorded in the same INSERT so the row
+    is never visible without them."""
     with connect() as c:
         cur = c.execute(
-            "INSERT INTO notifications (user_id, type, title, body, action, request_id, created_at) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (user_id, type, title, body, dumps(action), request_id, now()),
+            "INSERT INTO notifications (user_id, type, title, body, action, request_id, created_at,"
+            " delivered_via) VALUES (?,?,?,?,?,?,?,?)",
+            (user_id, type, title, body, dumps(action), request_id, now(),
+             ",".join(delivered_via) if delivered_via else None),
         )
         return _decode(row(c.execute(
             "SELECT * FROM notifications WHERE id=?", (cur.lastrowid,)
         ).fetchone()))
+
+
+def delivered_via(n: dict) -> list[str]:
+    """The stored comma list as a list, e.g. ["homeassistant", "sse"]."""
+    return [v for v in (n.get("delivered_via") or "").split(",") if v]
 
 
 def mark_delivered(notification_id: int, via: str) -> None:
@@ -31,13 +40,15 @@ def mark_delivered(notification_id: int, via: str) -> None:
 
 
 def list_for_user(user_id: int, *, since_id: int = 0, unread_only: bool = False,
-                  limit: int = 100) -> list[dict]:
+                  limit: int = 100, newest_first: bool = False) -> list[dict]:
+    """Items with id > since_id: the oldest `limit` of them, or with newest_first the newest
+    `limit`, newest first."""
     q = "SELECT * FROM notifications WHERE user_id=? AND id>?"
     if unread_only:
         q += " AND read_at IS NULL"
+    q += " ORDER BY id DESC LIMIT ?" if newest_first else " ORDER BY id LIMIT ?"
     with connect() as c:
-        return [_decode(r) for r in rows(c.execute(q + " ORDER BY id LIMIT ?",
-                                                   (user_id, since_id, limit)))]
+        return [_decode(r) for r in rows(c.execute(q, (user_id, since_id, limit)))]
 
 
 def unread_count(user_id: int) -> int:

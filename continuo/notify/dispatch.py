@@ -34,6 +34,7 @@ def notification_out(n: dict) -> dict:
         "id": n["id"], "type": n["type"], "title": n["title"], "body": n["body"],
         "createdAt": n["created_at"], "readAt": n["read_at"], "action": n["action"],
         "requestId": n["request_id"],
+        "deliveredVia": notif_db.delivered_via(n),
     }
 
 
@@ -46,19 +47,21 @@ async def request_event(row: dict, type: str, detail: str = "") -> dict | None:
     recipients = [row["user_id"]] if row.get("user_id") else sorted(users_db.admin_ids())
     first = None
     for uid in recipients:
-        n = notif_db.create(user_id=uid, type=type, title=title_t, body=body, action=action,
-                            request_id=row["id"])
-        first = first or n
-        if events.publish("notification.new", notification_out(n), uid):
-            notif_db.mark_delivered(n["id"], "sse")
+        # Push first, then create the inbox row with the outcome already on it. A poller (or the
+        # SSE payload) therefore never sees this item without its final "homeassistant" status,
+        # and the row's id is assigned when it becomes visible, so `since` cursors stay correct.
         user = users_db.get_by_id(uid)
         pushed = await homeassistant.notify(
             title=title_t, message=body, tag=f"request-{row['id']}",
             click_action=action.get("deepLink"), kind=type,
             username=user["username"] if user else None,
         )
-        if pushed:
-            notif_db.mark_delivered(n["id"], "homeassistant")
+        n = notif_db.create(user_id=uid, type=type, title=title_t, body=body, action=action,
+                            request_id=row["id"],
+                            delivered_via=["homeassistant"] if pushed else [])
+        first = first or n
+        if events.publish("notification.new", notification_out(n), uid):
+            notif_db.mark_delivered(n["id"], "sse")
     if type == "request_available":
         req_db.update(row["id"], notified_at=now())
     req_db.add_event(row["id"], "notified", {"type": type, "recipients": recipients})

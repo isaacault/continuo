@@ -436,13 +436,30 @@ GET  /v1/events                  # SSE; auth via Bearer header, or ?token= for E
      event: request.updated   data: Request (slim)
      event: request.available data: { requestId, play }
      event: notification.new  data: Notification
-GET  /v1/notifications?since=<cursor>&unread=true
+GET  /v1/notifications?since=<cursor>&unread=true&order=asc|desc&limit=100
 → { "items": [ { "id": 88, "type": "request_available", "title": "Ready to play",
                  "body": "Geogaddi — Boards of Canada", "createdAt": "…", "readAt": null,
-                 "action": { "type": "open_album", "navidromeAlbumId": "…", "requestId": 17, "deepLink": "polyphony://album/…" } } ],
-    "cursor": "…", "unreadCount": 1 }
+                 "action": { "type": "open_album", "navidromeAlbumId": "…", "requestId": 17, "deepLink": "polyphony://album/…" },
+                 "requestId": 17, "deliveredVia": ["homeassistant", "sse"] } ],
+    "cursor": 88, "unreadCount": 1 }
 POST /v1/notifications/read   { "ids": [88] } | { "all": true }
 ```
+
+Client contract (issue #16, so the phone doesn't get the same item twice):
+
+- `deliveredVia` is a set (order means nothing) of `"homeassistant"` (HA accepted the webhook,
+  so the companion app shows it as an OS notification) and `"sse"` (it reached at least one open
+  event stream). The HA attempt finishes **before** the inbox row is created, so an item is never
+  visible — in a poll or in the `notification.new` payload — without its final `homeassistant`
+  status. **Post a local notification only when `"homeassistant"` is not in `deliveredVia`**; a
+  failed or disabled HA push leaves it out. `"sse"` is recorded after the fan-out, so it is never
+  in the SSE payload itself; it is informational. (`homeassistant` means HA accepted the push,
+  not that this user's phone is the one the automation notifies.)
+- `order=asc` (default): the oldest `limit` items with `id > since`, oldest first; page forward
+  by passing `cursor` back as `since`. `order=desc`: the newest `limit` items with `id > since`,
+  newest first; items between `since` and those are skipped (use asc to catch up on everything).
+  In both, `cursor` is the highest id returned, or `since` when nothing is: the `since` for the
+  next "anything new?" poll. Ids only grow, and an item gets its id when it becomes visible.
 
 ### 3.5 Admin, health, internal
 

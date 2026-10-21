@@ -128,6 +128,7 @@ def test_full_request_lifecycle(client, fake, monkeypatch):
     n = inbox["items"][0]
     assert n["type"] == "request_available" and n["body"] == "Geogaddi — Boards of Canada"
     assert n["action"]["deepLink"] == "polyphony://album/music-api.test/nd-geo"
+    assert n["deliveredVia"] == ["homeassistant"]
     assert ha == [{"title": "Ready to play", "message": "Geogaddi — Boards of Canada",
                    "tag": f"request-{rid}", "kind": "request_available",
                    "clickAction": "polyphony://album/music-api.test/nd-geo", "username": "isaac"}]
