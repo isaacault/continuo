@@ -1,0 +1,33 @@
+# Home Assistant automation: continuo notifications → the phone, with a tap-to-play deep link.
+# Append to /config/automations.yaml (then Developer tools → YAML → Reload automations).
+# continuo POSTs {title, message, tag, kind, clickAction, username} to
+# HA_WEBHOOK_URL = http://192.168.0.101:8123/api/webhook/<webhook_id>.
+#
+# Separate from the homelab alert webhook so these land on their own Android channel
+# ("Music requests"); `tag` = request-<id>, so a later message about the same request replaces the
+# earlier one. kind: request_available | request_needs_attention | request_error | policy.
+# To route household members to their own phones, add a `choose` on trigger.json.username.
+- id: continuo_music_requests
+  alias: Music requests (from continuo)
+  description: continuo POSTs here when a requested album is ready to play, needs a look, or
+    couldn't be added. Webhook is local-network only; its URL lives in sops secrets/continuo.env
+    (HA_WEBHOOK_URL). Tapping opens the album in Polyphony.
+  triggers:
+  - trigger: webhook
+    webhook_id: REPLACE-WITH-A-LONG-RANDOM-ID
+    allowed_methods:
+    - POST
+    local_only: true
+  actions:
+  - action: notify.mobile_app_pixel_8
+    data:
+      title: '{{ trigger.json.title | default(''Music'') }}'
+      message: '{{ trigger.json.message | default('''') }}'
+      data:
+        channel: Music requests
+        group: music-requests
+        tag: '{{ trigger.json.tag | default(''continuo'') }}'
+        # Polyphony deep link, e.g. polyphony://album/music-api.ault.me/<navidromeAlbumId>
+        clickAction: '{{ trigger.json.clickAction or ''noAction'' }}'
+    continue_on_error: true
+  mode: queued

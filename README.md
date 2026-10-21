@@ -10,23 +10,45 @@ always-running service that underpins the client.
 
 ## Status
 
-Planning. Nothing runs yet. The design, API sketch, porting plan from
-[lidseeker](https://github.com/isaacault/lidseeker), phased roadmap and migration plan are in
-**[PLAN.md](PLAN.md)**.
+Phases 0–3 are deployed on the homelab Jetson for testing, alongside Lidseeker: search and
+requests (`/v1`), the Subsonic façade at `music-api.ault.me/rest`, the Lidarr webhook, Navidrome
+matching and Home Assistant "ready to play" notifications. Polyphony's sign-in and requests UI are
+in progress. Design: **[PLAN.md](PLAN.md)**. Deploying, verifying and operating each phase:
+**[docs/RUNBOOK.md](docs/RUNBOOK.md)**. Working rules: **[CLAUDE.md](CLAUDE.md)**.
 
-## Shape (from the plan)
+## Shape
 
 - **Library plane** — a Subsonic-compatible façade at `music-api.ault.me/rest/*`: Caddy
-  `forward_auth` asks continuo to validate a per-device token, then proxies straight to Navidrome
-  with `Remote-User`. Audio never passes through continuo; devices never hold Navidrome
-  credentials; any Subsonic client on any OS works unchanged.
+  `forward_auth` asks continuo (`/internal/auth/subsonic`) to validate a per-device credential,
+  then proxies straight to Navidrome with `Remote-User` (Navidrome ExtAuth). Audio never passes
+  through continuo; devices never hold Navidrome credentials; any Subsonic client works.
 - **Request plane** — `/v1/*` JSON: auth and devices, unified search (library + Lidarr
-  catalogue), album requests with a live pipeline that never gives up, notification inbox and
-  SSE, Lidarr webhook, matching of imported albums to Navidrome albums.
-- Python 3.12 + FastAPI + httpx + SQLite, one small ARM64 container on the homelab Jetson.
+  catalogue + MusicBrainz), album requests with a live pipeline that never gives up,
+  notification inbox and SSE, Lidarr webhook, matching of imported albums to Navidrome albums,
+  Home Assistant push with a deep link.
+- Python 3.12 + FastAPI + httpx + SQLite, one ~45 MB-RSS container on the homelab Jetson.
 
-## Where to start
+## Layout
 
-Phase 0 in [PLAN.md §6](PLAN.md#6-phased-roadmap-with-verification-against-the-real-services):
-repo skeleton, `/v1/health`, compose file, Caddy site, Uptime Kuma monitor. Merge the two
-lidseeker fix branches first so the system you fall back to during migration is the fixed one.
+```
+continuo/api/        routers: auth/devices, search/catalog, requests, notifications+SSE, admin, internal, health
+continuo/auth/       passwords, access+refresh tokens, façade check, FastAPI deps
+continuo/upstream/   lidarr, navidrome (Subsonic + native), slskd, soularr, musicbrainz, homeassistant
+continuo/requests/   orchestrate (request_album), pipeline, matching, normalise, view
+continuo/search/     unified search merge, TTL cache
+continuo/workers/    status, reconcile, scan watcher, library index, heartbeat/nightly
+continuo/db/         sqlite helpers, migrations runner, one module per table group
+continuo/migrations/ numbered SQL migrations
+deploy/              compose, Caddy, docker-proxy, Home Assistant automation, env template
+```
+
+## Develop
+
+```bash
+pip install -e '.[dev]'
+ruff check . && pytest -q
+docker build -t ghcr.io/isaacault/continuo:edge .
+```
+
+Portions are derived from [lidseeker](https://github.com/IvoryCobra-VC/lidseeker) (MIT, see
+[LICENSES/lidseeker-MIT.txt](LICENSES/lidseeker-MIT.txt)).

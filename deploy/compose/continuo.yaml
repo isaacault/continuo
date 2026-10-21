@@ -1,0 +1,78 @@
+# continuo — the API beneath Polyphony (music-api.ault.me): unified search, album requests with a
+# live pipeline that never gives up, notifications, and the Subsonic façade's auth check.
+# Talks to Lidarr/slskd APIs only; every download still originates from Lidarr/qBittorrent/slskd
+# inside gluetun. Never touches the music files. Secrets in .env, decrypted from
+# secrets/continuo.env (JWT_SECRET, LIDARR_API_KEY, LIDARR_WEBHOOK_SECRET, SLSKD_API_KEY,
+# HA_WEBHOOK_URL, UPTIME_KUMA_PUSH_URL, ADMIN_PASSWORD; NAVIDROME_SERVICE_PASSWORD is only used if
+# NAVIDROME_AUTH is set back to "password").
+services:
+  continuo:
+    image: ghcr.io/isaacault/continuo:edge     # built locally on the Jetson for now (docker build in the continuo
+                                               # repo); pin a version tag + digest once CI publishes one
+    pull_policy: never                         # not on ghcr yet — keeps `make pull/update` from failing on it
+    container_name: continuo
+    profiles: ["media", "all"]
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    env_file:
+      - path: .env
+        required: false                       # so a missing .env never breaks `make` for other services
+    environment:
+      TZ: Europe/London
+      PUBLIC_BASE_URL: https://music-api.ault.me
+      # Lidarr and slskd live in gluetun's netns; gluetun is on the compose network.
+      LIDARR_URL: http://gluetun:8686
+      SLSKD_URL: http://gluetun:5030
+      ROOT_FOLDER_PATH: /data/music           # Lidarr's root folder (as Lidarr sees it)
+      QUALITY_PROFILE_ID: "4"                 # FLAC (MP3 Fallback) — same as lidseeker
+      METADATA_PROFILE_ID: "1"                # Standard
+      # Navidrome trusts continuo's music-auth address: calls carry Remote-User (the requesting
+      # user for searches, continuo-svc otherwise) and continuo needs no Navidrome password.
+      NAVIDROME_URL: http://navidrome-trusted:4533
+      NAVIDROME_MUSIC_ROOT: /music
+      NAVIDROME_AUTH: header
+      NAVIDROME_SERVICE_USER: continuo-svc
+      ADMIN_USER: admin                       # first boot only (password in .env); listen as your own
+                                              # user: `continuo create-user isaac` (→ Navidrome user isaac)
+      MUSICBRAINZ_CONTACT: https://github.com/isaacault/continuo
+      DOCKER_PROXY_URL: http://continuo-docker-proxy:2375
+      SOULARR_CONFIG_PATH: /soularr/config.ini
+      SOULARR_DENYLIST_PATH: /soularr/failed_imports.json
+      TRUST_PROXY: "true"                     # behind Caddy → rate-limit on the real client IP
+    volumes:
+      - /ssd/appdata/continuo:/data           # SQLite (backed up via `continuo backup`, see backup/)
+      - /ssd/appdata/soularr:/soularr         # Soularr config.ini (quality toggle) + denylist (Retry)
+    # No published port: only Caddy (and Lidarr's webhook, via Caddy) talk to it.
+    networks:
+      default: {}
+      music-auth:
+        ipv4_address: 172.30.42.3
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/v1/health').status==200 else 1)"]
+      interval: 1m
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Ported from lidseeker: allows exactly POST /containers/soularr/restart, 403s everything else,
+  # so continuo never holds the raw Docker socket.
+  continuo-docker-proxy:
+    image: nginx:alpine
+    container_name: continuo-docker-proxy
+    profiles: ["media", "all"]
+    restart: unless-stopped
+    volumes:
+      - ./docker-proxy.conf:/etc/nginx/nginx.conf:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    mem_limit: 32m
+
+# The Subsonic façade's trust network. Navidrome trusts Remote-User only from Caddy (.2) and continuo (.3) —
+# ND_EXTAUTH_TRUSTEDSOURCES in apps/navidrome.yaml — instead of from every container on the compose network.
+networks:
+  music-auth:
+    name: music-auth
+    internal: true                  # container-to-container only: never anyone's route out
+    ipam:
+      config:
+        - subnet: 172.30.42.0/29

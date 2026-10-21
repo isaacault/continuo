@@ -1,0 +1,45 @@
+[project]
+name = "continuo"
+version = "0.1.0"
+description = "One private API in front of Navidrome, Lidarr and Soulseek: search, play, request, get told when it lands."
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+  "fastapi==0.138.1",
+  "uvicorn[standard]==0.49.0",
+  "httpx==0.28.1",
+  "pyjwt==2.13.0",
+  "bcrypt==5.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==8.4.2", "ruff==0.14.0"]
+
+[project.scripts]
+continuo = "continuo.cli:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["continuo*"]
+
+[tool.setuptools.package-data]
+continuo = ["migrations/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# Same pragmatic set as lidseeker: pyflakes, pycodestyle, bugbear, plus import order.
+select = ["E", "W", "F", "B", "I"]
+ignore = [
+  "E501",  # long comments/strings are fine
+  "B008",  # Depends()/Query() in defaults is idiomatic FastAPI
+]
