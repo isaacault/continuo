@@ -38,7 +38,11 @@ def test_library_wins_and_catalogue_folds_in(client, fake):
     assert geo["ids"]["navidromeAlbumId"] == "nd-geo"
     assert geo["artwork"]["url"].endswith("/rest/getCoverArt?id=al-nd-geo")
     assert harvest["availability"] == {"state": "requestable"}
-    assert harvest["artwork"]["url"].startswith("https://coverartarchive.org/")
+    # Catalogue art goes through continuo (issue #13), library art stays Subsonic.
+    assert harvest["artwork"] == {"url": "https://music-api.test/v1/artwork?src="
+                                  "https%3A%2F%2Fcoverartarchive.org%2Frelease-group%2F"
+                                  f"{HARVEST}%2Ffront-500"}
+    assert geo["artwork"]["auth"] == "subsonic"
     # search3 ran as the user (Remote-User), not the service account.
     nd_call = fake.called("GET", f"{ND}/rest/search3")[0]
     assert nd_call.headers["remote-user"] == "isaac"

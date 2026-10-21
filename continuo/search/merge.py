@@ -10,7 +10,7 @@ from typing import Optional
 
 import httpx
 
-from .. import config
+from .. import artwork, config
 from ..db import library as lib_db
 from ..db import requests as req_db
 from ..requests.normalise import album_key, normalise, track_key
@@ -152,7 +152,7 @@ def merge_albums(lib_albums: list[dict], catalog: list[dict], index: _LibraryInd
             "kind": "album", "key": f"mb:rg:{rg}" if rg else f"cat:{key}",
             "title": c.get("title"), "artist": c.get("artist"), "year": c.get("year"),
             "albumType": c.get("albumType"),
-            "artwork": {"url": c.get("imageUrl")},
+            "artwork": artwork.catalog_art(c.get("imageUrl")),
             "ids": {"musicBrainzReleaseGroupId": rg, "musicBrainzReleaseId": None,
                     "navidromeAlbumId": None, "lidarrAlbumId": c.get("lidarrAlbumId")},
             "availability": availability,
@@ -197,7 +197,7 @@ def merge_artists(lib_artists: list[dict], catalog: list[dict], limit: int) -> l
         # Not requestable as a whole (policy: nothing follows artists); browse the discography.
         results.append({
             "kind": "artist", "key": f"mb:artist:{mbid}" if mbid else f"cat:{normalise(c.get('name'))}",
-            "name": c.get("name"), "artwork": {"url": c.get("imageUrl")},
+            "name": c.get("name"), "artwork": artwork.catalog_art(c.get("imageUrl")),
             "ids": {"musicBrainzArtistId": mbid, "navidromeArtistId": None},
             "availability": {"state": "catalog"},
         })
@@ -241,7 +241,7 @@ def merge_tracks(lib_songs: list[dict], catalog: list[dict], index: _LibraryInde
             "kind": "track", "key": f"mb:rec:{rec}", "title": c.get("title"),
             "artist": c.get("artist"), "durationMs": c.get("durationMs"),
             "album": dict(c["album"], navidromeAlbumId=lib["navidrome_id"] if lib else None),
-            "artwork": {"url": c.get("imageUrl")},
+            "artwork": artwork.catalog_art(c.get("imageUrl")),
             "availability": availability,
         })
     return results[:limit]

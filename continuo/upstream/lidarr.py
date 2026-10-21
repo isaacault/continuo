@@ -13,7 +13,7 @@ from typing import Optional
 
 import httpx
 
-from .. import config
+from .. import artwork, config
 from . import http
 
 log = logging.getLogger("continuo")
@@ -67,6 +67,12 @@ def coverart_url(release_group_mbid: Optional[str]) -> Optional[str]:
     return f"https://coverartarchive.org/release-group/{release_group_mbid}/front-500"
 
 
+def _album_image(item: dict) -> Optional[str]:
+    """Lidarr's album image when continuo can proxy it (/v1/artwork), else Cover Art Archive."""
+    img = _best_image(item.get("images", []), "album")
+    return img if artwork.proxyable(img) else coverart_url(item.get("foreignAlbumId"))
+
+
 def normalize_artist(item: dict) -> dict:
     return {
         "kind": "artist",
@@ -92,8 +98,7 @@ def normalize_album(item: dict) -> dict:
         "musicBrainzArtistId": artist.get("foreignArtistId"),
         "year": _year(item.get("releaseDate")),
         "albumType": item.get("albumType"),
-        "imageUrl": _best_image(item.get("images", []), "album")
-        or coverart_url(item.get("foreignAlbumId")),
+        "imageUrl": _album_image(item),
         "lidarrAlbumId": item.get("id") or None,
         "releaseIds": [r.get("foreignReleaseId") for r in releases if r.get("foreignReleaseId")],
         "trackFileCount": stats.get("trackFileCount") or 0,

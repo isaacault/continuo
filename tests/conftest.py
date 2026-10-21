@@ -88,8 +88,11 @@ def fake(monkeypatch, tmp_path):
     registry.reset()
     events._subscribers.clear()
     from continuo import ratelimit
-    for lim in (ratelimit.login_limiter, ratelimit.search_limiter, ratelimit.catalog_limiter):
+    for lim in (ratelimit.login_limiter, ratelimit.search_limiter, ratelimit.catalog_limiter,
+                ratelimit.artwork_limiter):
         lim._hits.clear()
+    from continuo import artwork
+    artwork.reset()
     yield f
     http.use_transport(None)
 
