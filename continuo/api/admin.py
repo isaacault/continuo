@@ -54,14 +54,20 @@ async def policy_check() -> dict:
         checks.append(_check("artists_following_new_releases", "unknown", str(e)))
 
     try:
+        # Lidarr must NOT write tags: it edits files in place, and a torrent's library file is a
+        # hardlink of the file still seeding, so tagging would corrupt the torrent. (It would also
+        # change Navidrome's album/track IDs, which come from musicbrainz_albumid/trackid.)
+        # Matching doesn't need tags: folder paths come first. See docs/RUNBOOK.md.
         meta = await lidarr.metadata_provider_config()
         write, scrub = meta.get("writeAudioTags"), meta.get("scrubAudioTags")
-        ok = write in ("newFiles", "NewFiles") and not scrub
+        ok = write in ("no", "No", None) and not scrub
         checks.append(_check(
             "lidarr_tagging", "ok" if ok else "warn",
-            f"Lidarr tagging: writeAudioTags={write}, scrubAudioTags={scrub}"
-            + ("" if ok else " — want 'new files only' and scrub off (MBIDs in files, purchased "
-               "music untouched)."), writeAudioTags=write, scrubAudioTags=scrub))
+            "Lidarr doesn't write tags (correct: files are hardlinks of seeding torrents)." if ok
+            else f"Lidarr is set to write tags (writeAudioTags={write}, scrubAudioTags={scrub}) — "
+                 "it edits files in place, corrupting hardlinked seeding torrents and changing "
+                 "Navidrome's album/track IDs. Set 'Tag Audio Files' to No.",
+            writeAudioTags=write, scrubAudioTags=scrub))
     except httpx.HTTPError as e:
         checks.append(_check("lidarr_tagging", "unknown", str(e)))
 

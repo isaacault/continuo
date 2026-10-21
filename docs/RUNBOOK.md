@@ -113,12 +113,26 @@ on `music.ault.me` still works with passwords. Cast/DLNA still play.
    `eventType=Test`. (Lidarr is inside gluetun: if Test can't connect, gluetun's
    `FIREWALL_OUTBOUND_SUBNETS` must include `192.168.0.0/24`. Without the webhook, requests
    still complete via polling, just slower.)
-2. Lidarr → Settings → Metadata: write audio tags for **new files only**, scrub **off**. Check
-   with `metaflac --list` that an imported file carries `MUSICBRAINZ_RELEASEGROUPID`, and that
-   it survives a tagscrub pass.
+2. **MusicBrainz tags: deliberately not written** (decided 2026-10-21). Lidarr's *Tag Audio
+   Files* stays **No** — the plan's "new files only" was wrong for this stack:
+   - Lidarr edits tags in place, and a torrent's library file is a hardlink of the file still
+     seeding, so tagging would corrupt the torrent (tagscrub exists to avoid exactly this).
+   - Navidrome 0.64 derives album/track IDs from `musicbrainz_albumid` / `musicbrainz_trackid`
+     when present, so adding them later re-identifies albums: Polyphony re-syncs them as new,
+     offline copies re-download, stars/plays/playlist entries are likely lost, and a
+     just-imported album's id changes under continuo's "ready to play" link.
+   - Matching doesn't need them: folder paths match first and cover the whole library.
+   Extending tagscrub to add them (safe for hardlinks) was considered and rejected for the
+   ID churn. Albums whose uploader already tagged them (e.g. via Picard) keep their tags; the
+   policy check warns if Lidarr tagging is ever switched on.
 3. **Home Assistant**: automation from [`deploy/homeassistant/music-requests.yaml`](../deploy/homeassistant/music-requests.yaml);
    put its webhook URL in `HA_WEBHOOK_URL`.
 4. Polyphony: handle `polyphony://album/{server}/{albumId}` (server = `music-api.ault.me`).
+
+Lidarr webhook (done 2026-10-21): connection "continuo" → `http://continuo:8080/internal/webhooks/lidarr`
+with header `X-Webhook-Secret`. Not `https://music-api.ault.me`: Lidarr is in gluetun's netns, whose
+DNS refuses private answers (rebinding protection) and whose firewall blocks the LAN; the container
+name resolves there and follows continuo across recreates.
 
 Verify: request an album → `GET /v1/requests/<id>/events` shows `webhook_grab`,
 `webhook_import`, `status → scanning`, `matched` (expect `"strategy": "paths"`), `notified`; the

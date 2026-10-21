@@ -95,7 +95,7 @@ def test_policy_check_flags_upgrades_and_followers(client, fake):
     fake.on("GET", f"{LIDARR}/qualityprofile/1", {"name": "FLAC", "upgradeAllowed": True})
     fake.on("GET", f"{LIDARR}/artist", [{"artistName": "Followed", "monitorNewItems": "all"},
                                        {"artistName": "Fine", "monitorNewItems": "none"}])
-    fake.on("GET", f"{LIDARR}/config/metadataprovider", {"writeAudioTags": "newFiles",
+    fake.on("GET", f"{LIDARR}/config/metadataprovider", {"writeAudioTags": "no",
                                                         "scrubAudioTags": False})
     fake.on("GET", f"{LIDARR}/notification", [{"implementation": "Webhook", "fields": [
         {"name": "url", "value": "https://music-api.ault.me/internal/webhooks/lidarr"}]}])
@@ -105,7 +105,12 @@ def test_policy_check_flags_upgrades_and_followers(client, fake):
     assert report["ok"] is False
     assert by["quality_profile_upgrades"]["status"] == "warn"
     assert by["artists_following_new_releases"]["artists"] == ["Followed"]
-    assert by["lidarr_tagging"]["status"] == "ok"
+    assert by["lidarr_tagging"]["status"] == "ok"            # tagging off is the safe state
+    fake.on("GET", f"{LIDARR}/config/metadataprovider", {"writeAudioTags": "newFiles",
+                                                        "scrubAudioTags": False})
+    report = client.get("/v1/admin/policy-check", headers=bearer(s)).json()
+    tagging = next(c for c in report["checks"] if c["name"] == "lidarr_tagging")
+    assert tagging["status"] == "warn" and "hardlinked" in tagging["message"]
     assert by["lidarr_webhook"]["status"] == "ok"
     assert by["navidrome_auth"]["status"] == "ok"
 
