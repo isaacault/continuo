@@ -1,7 +1,7 @@
 """The API shape of a request (PLAN.md §3.3)."""
 from typing import Optional
 
-from .. import config
+from .. import artwork, config
 
 
 def deep_link(navidrome_album_id: Optional[str]) -> Optional[str]:
@@ -30,7 +30,7 @@ def to_out(row: dict, pipeline: Optional[dict] = None,
         "title": row.get("title"),
         "artist": row.get("artist"),
         "year": row.get("year"),
-        "artwork": {"url": row.get("artwork_url")},
+        "artwork": artwork.catalog_art(row.get("artwork_url")),
         "ids": {
             "musicBrainzReleaseGroupId": row["mb_release_group_id"],
             "musicBrainzReleaseId": row.get("lidarr_release_id"),

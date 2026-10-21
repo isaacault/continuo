@@ -3,6 +3,7 @@ import re
 
 from fastapi import APIRouter, Depends, Query, Request
 
+from .. import artwork
 from ..auth.deps import CurrentUser, require_user
 from ..db import library as lib_db
 from ..db import requests as req_db
@@ -52,7 +53,8 @@ def _album_out(album: dict, availability: dict) -> dict:
     return {
         "kind": "album", "key": f"mb:rg:{album['musicBrainzReleaseGroupId']}",
         "title": album.get("title"), "artist": album.get("artist"), "year": album.get("year"),
-        "albumType": album.get("albumType"), "artwork": {"url": album.get("imageUrl")},
+        "albumType": album.get("albumType"),
+        "artwork": artwork.catalog_art(album.get("imageUrl")),
         "ids": {"musicBrainzReleaseGroupId": album.get("musicBrainzReleaseGroupId"),
                 "musicBrainzArtistId": album.get("musicBrainzArtistId"),
                 "lidarrAlbumId": album.get("lidarrAlbumId"),

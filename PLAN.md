@@ -367,7 +367,9 @@ GET /v1/search?q=geogaddi&types=album,artist,track&limit=25
       "kind": "album",
       "key": "mb:rg:4a1b…",                       # stable merge key; "nd:<id>" when no MBID
       "title": "Geogaddi", "artist": "Boards of Canada", "year": 2002, "albumType": "Album",
-      "artwork": { "url": "https://music-api.ault.me/rest/getCoverArt?id=…" | "https://coverartarchive.org/release-group/…/front-500" },
+      "artwork": { "url": "https://music-api.ault.me/rest/getCoverArt?id=…" | "https://music-api.ault.me/v1/artwork?src=https%3A%2F%2Fcoverartarchive.org%2F…" },
+      # library art: Subsonic getCoverArt (client adds its façade auth); catalogue art: continuo's
+      # unauthenticated, allow-listed artwork proxy (issue #13), never a third-party host
       "ids": { "musicBrainzReleaseGroupId": "4a1b…", "navidromeAlbumId": "e9c…", "lidarrAlbumId": 412 },
       "availability": { "state": "in_library", "trackCount": 23 }
       # or { "state": "requestable" }

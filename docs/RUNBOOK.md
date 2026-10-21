@@ -165,6 +165,24 @@ docker exec -it continuo continuo create-user charlie --navidrome-username charl
 docker exec continuo continuo backup
 ```
 
+**Catalogue artwork** (issue #13, decided 2026-10-21): search, catalogue and request outputs
+never point at third-party hosts; catalogue art is `{PUBLIC_BASE_URL}/v1/artwork?src=<url>[&size=px]`
+(library art stays Subsonic `getCoverArt`). The route is **unauthenticated** on purpose: Coil
+loads images with Polyphony's base OkHttp client, which sends no auth headers, and
+`music-api.ault.me` is LAN/tailnet only (Caddy `import private`; no Caddy change needed, the
+catch-all `handle` already proxies `/v1/*`). It is not an open proxy: `src` must be https on
+`coverartarchive.org`, `images.lidarr.audio` or `imagecache.lidarr.audio`; redirects are followed
+by hand (max 5) and only to those or `archive.org` / `*.archive.org` (CAA → 307 archive.org → 302
+`iaNNN.us.archive.org`), http redirects upgraded to https; only jpeg/png/webp/gif (type header
+and magic bytes), at most `ARTWORK_MAX_BYTES` (10 MB); upstream fetches are rate-limited per
+client (300/min). `size` picks CAA's 250/500/1200 thumbnail. Responses: `Cache-Control: public,
+max-age=604800` + ETag. Disk cache: `/data/artwork` (`ARTWORK_CACHE_DIR`), capped at
+`ARTWORK_CACHE_MB` (200), least-recently-used files evicted down to 90 %; upstream 404s ("no
+art") are remembered in memory for an hour. The cache is disposable (`rm -rf
+/ssd/appdata/continuo/artwork` clears stale covers) and can be left out of restic. Check:
+`curl -sI "https://music-api.ault.me/v1/artwork?src=https%3A%2F%2Fcoverartarchive.org%2Frelease-group%2F<rg>%2Ffront-500"`
+→ 200 `image/jpeg`; `?src=https%3A%2F%2Fexample.com%2Fx.jpg` → 400 `artwork_not_allowed`.
+
 **Request latency** (issue #10, evidence for "play now"): `GET /v1/admin/latency?days=30` (admin
 token) gives median/p90 seconds per source for request → download start → first complete file →
 available in Navidrome, plus the recent requests. Milestones are recorded by the 45 s status loop

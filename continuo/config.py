@@ -105,6 +105,12 @@ class Settings:
     loop_stale_seconds: int = 300
     library_index_hour: int = 4
 
+    # --- catalogue artwork proxy (/v1/artwork) ---
+    # Disk cache directory; empty = "artwork" next to the database.
+    artwork_cache_dir: str = ""
+    artwork_cache_mb: int = 200
+    artwork_max_bytes: int = 10 * 1024 * 1024
+
     # --- server ---
     port: int = 8080
     log_json: bool = True
@@ -202,6 +208,9 @@ def load(env: dict | None = None) -> Settings:
         heartbeat_seconds=_int(e, "HEARTBEAT_SECONDS", 60),
         loop_stale_seconds=_int(e, "LOOP_STALE_SECONDS", 300),
         library_index_hour=_int(e, "LIBRARY_INDEX_HOUR", 4),
+        artwork_cache_dir=_str(e, "ARTWORK_CACHE_DIR"),
+        artwork_cache_mb=_int(e, "ARTWORK_CACHE_MB", 200),
+        artwork_max_bytes=_int(e, "ARTWORK_MAX_BYTES", 10 * 1024 * 1024),
         port=_int(e, "PORT", 8080),
         log_json=_bool(e, "LOG_JSON", True),
     )
