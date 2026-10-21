@@ -1,10 +1,11 @@
 name: ci
 
+# Development CI is local (scripts/ci.sh, gated by scripts/merge_when_green.sh, recorded as the
+# "local-ci" commit status), so this workflow never runs on its own and never spends Actions
+# minutes. It stays for outside contributors: run it by hand from the Actions tab (or
+# `gh workflow run ci --ref <branch>`), e.g. to check a fork's PR on GitHub's runners.
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

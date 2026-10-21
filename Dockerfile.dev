@@ -1,0 +1,12 @@
+# continuo's CI image: Python 3.12 with the project's pinned runtime and dev dependencies
+# (pyproject.toml), but not the project itself — scripts/ci.sh mounts the checkout under test.
+# ci.sh tags it by a hash of pyproject.toml + this file, so it rebuilds only when those change.
+FROM python:3.12-slim
+WORKDIR /deps
+COPY pyproject.toml ./
+# A stub package lets pip resolve `.[dev]` from pyproject alone; it is removed again.
+RUN mkdir continuo && touch continuo/__init__.py \
+    && pip install --no-cache-dir '.[dev]' \
+    && pip uninstall -y -q continuo \
+    && rm -rf /deps
+WORKDIR /src
