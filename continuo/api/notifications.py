@@ -1,5 +1,6 @@
 """Inbox and the SSE stream (PLAN.md §3.4)."""
 import asyncio
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
@@ -21,9 +22,15 @@ KEEPALIVE_SECONDS = 25.0
 @router.get("/notifications")
 async def list_notifications(since: int = Query(0, ge=0), unread: bool = Query(False),
                              limit: int = Query(100, ge=1, le=500),
+                             order: Literal["asc", "desc"] = Query("asc"),
                              user: CurrentUser = Depends(require_user)) -> dict:
-    items = notif_db.list_for_user(user.id, since_id=since, unread_only=unread, limit=limit)
-    cursor = items[-1]["id"] if items else since
+    """Items with id > since. asc: the oldest `limit`, oldest first (page forward by passing
+    cursor back as since). desc: the newest `limit`, newest first; older items above `since`
+    beyond the limit are skipped. Either way `cursor` is the highest id returned (or `since`),
+    i.e. the `since` for the next "anything new?" poll."""
+    items = notif_db.list_for_user(user.id, since_id=since, unread_only=unread, limit=limit,
+                                   newest_first=order == "desc")
+    cursor = max((n["id"] for n in items), default=since)
     return {"items": [notification_out(n) for n in items], "cursor": cursor,
             "unreadCount": notif_db.unread_count(user.id)}
 
