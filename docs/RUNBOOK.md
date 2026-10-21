@@ -14,16 +14,20 @@ Design and rationale: [PLAN.md](../PLAN.md). Files referenced here live in [`dep
 | Home Assistant | host network, `http://192.168.0.101:8123`. |
 | Backups | `/ssd/appdata` is already in the restic set. |
 
-## Build and test
+## Build and test (local CI)
 
 ```bash
-docker build -t continuo-dev - <<'EOF'
-FROM python:3.12-slim
-RUN pip install fastapi==0.138.1 "uvicorn[standard]==0.49.0" httpx==0.28.1 pyjwt==2.13.0 bcrypt==5.0.0 pytest==8.4.2 ruff==0.14.0
-EOF
-docker run --rm -u $(id -u):$(id -g) -e HOME=/tmp -v $PWD:/src -w /src continuo-dev sh -c 'ruff check . && pytest -q'
-docker build -t ghcr.io/isaacault/continuo:edge .     # local image until CI publishes one
+scripts/ci.sh            # ruff + pytest in the pinned CI image (Dockerfile.dev), no network
+scripts/ci.sh --image    # … and build the production image (native ARM64)
+scripts/merge_when_green.sh <pr>   # the merge gate: ci.sh --image on the PR head → "local-ci" status → merge
+docker build -t ghcr.io/isaacault/continuo:edge .   # the image the Jetson runs (pull_policy: never)
 ```
+
+GitHub Actions only runs on demand (`gh workflow run ci --ref <branch>`, for outside
+contributors). `ci.sh` serialises with Polyphony's local CI through the shared lock
+`/ssd/Personal/repositories/.locks/docker-ci.lock` and waits for `CI_MIN_FREE_MB` (700) of free
+memory before starting, because the Jetson shares RAM with the homelab. The CI image is tagged
+by a hash of `pyproject.toml` + `Dockerfile.dev` and rebuilt only when they change.
 
 ## Phase 0/1 — continuo on the Jetson, search + requests
 
