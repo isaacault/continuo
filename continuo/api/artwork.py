@@ -48,7 +48,7 @@ async def get_artwork(request: Request,
 
     artwork_limiter.check(request)
     try:
-        data, _kind = await artwork.fetch(url)
+        data, _kind = await artwork.fetch_image(url)
     except artwork.NotFound as e:
         artwork.remember_missing(key)
         raise ApiError(404, "no_artwork", "There's no artwork for this.") from e
