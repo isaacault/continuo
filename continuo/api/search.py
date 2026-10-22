@@ -10,7 +10,7 @@ from ..db import requests as req_db
 from ..errors import ApiError
 from ..ratelimit import catalog_limiter, search_limiter
 from ..requests.normalise import album_key
-from ..search import merge
+from ..search import artist_info, merge
 from ..upstream import lidarr, musicbrainz
 
 router = APIRouter(prefix="/v1", tags=["search"])
@@ -71,6 +71,17 @@ async def artist_albums(request: Request, mbid: str,
     index = merge._LibraryIndex(lib_db.all_albums())
     requests = req_db.active_by_release_group()
     return [_album_out(a, _album_availability(a, index, requests)) for a in albums]
+
+
+@router.get("/catalog/artists/{mbid}")
+async def catalog_artist(request: Request, mbid: str,
+                         _user: CurrentUser = Depends(require_user)) -> dict:
+    """An artist's page for any artist: name, picture, biography, top songs, similar artists."""
+    catalog_limiter.check(request)
+    page = await artist_info.build(_check_mbid(mbid))
+    if page is None:
+        raise ApiError(404, "not_found", "Artist not found in the catalogue.")
+    return page
 
 
 @router.get("/catalog/albums/{mbid}")

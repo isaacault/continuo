@@ -85,6 +85,9 @@ class Settings:
 
     # --- MusicBrainz ---
     musicbrainz_contact: str = "https://github.com/isaacault/continuo"
+    # ListenBrainz user token: only its popularity data (an artist's top songs) needs one; the
+    # rest of the artist page works without. Empty = no top songs.
+    listenbrainz_token: str = ""
 
     # --- notifications ---
     ha_webhook_url: str = ""
@@ -195,6 +198,7 @@ def load(env: dict | None = None) -> Settings:
             e, "SOULARR_ENABLED", bool(slskd_api_key) and os.path.exists(soularr_config_path)
         ),
         musicbrainz_contact=_str(e, "MUSICBRAINZ_CONTACT", "https://github.com/isaacault/continuo"),
+        listenbrainz_token=_str(e, "LISTENBRAINZ_TOKEN"),
         ha_webhook_url=_str(e, "HA_WEBHOOK_URL"),
         uptime_kuma_push_url=_str(e, "UPTIME_KUMA_PUSH_URL"),
         status_poll_seconds=_int(e, "STATUS_POLL_SECONDS", 45),

@@ -167,13 +167,33 @@ async def artist_albums(foreign_artist_id: str) -> list[dict]:
     return await _metadata_artist_albums(foreign_artist_id)
 
 
-async def _metadata_artist_albums(foreign_artist_id: str) -> list[dict]:
+async def metadata_artist(foreign_artist_id: str) -> Optional[dict]:
+    """Lidarr's metadata server's artist (name, overview, images, Albums), library or not; None
+    when it's unreachable or doesn't know the artist."""
     try:
         c = http.client("lidarr-metadata", timeout=20.0)
         r = await c.get(f"{_METADATA_URL}/artist/{foreign_artist_id}")
         r.raise_for_status()
         data = r.json()
     except (httpx.HTTPError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def metadata_image(data: dict) -> Optional[str]:
+    """The artist picture from a metadata-server artist (absolute images.lidarr.audio URLs,
+    unlike the Lidarr API's local paths): poster first, then fanart."""
+    by_type = {(i.get("CoverType") or i.get("coverType") or "").lower(): i for i in data.get("images") or []}
+    for pref in ("poster", "fanart", "cover", "banner"):
+        url = (by_type.get(pref) or {}).get("Url") or (by_type.get(pref) or {}).get("url")
+        if url and url.startswith("http"):
+            return url
+    return None
+
+
+async def _metadata_artist_albums(foreign_artist_id: str) -> list[dict]:
+    data = await metadata_artist(foreign_artist_id)
+    if data is None:
         return []
     name = data.get("artistname") or data.get("artistName")
     out: list[dict] = []

@@ -24,6 +24,9 @@ class TTLCache:
                 del self._data[next(iter(self._data))]
         self._data[key] = (time.monotonic(), value)
 
+    def drop(self, key) -> None:
+        self._data.pop(key, None)
+
     def clear(self) -> None:
         self._data.clear()
 
