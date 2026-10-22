@@ -218,6 +218,19 @@ docker exec -it continuo continuo create-user charlie --navidrome-username charl
 docker exec continuo continuo backup
 ```
 
+**Catalogue artist pages** (decided 2026-10-22, the user's choice): `GET /v1/catalog/artists/{mbid}`
+gives any artist what a library artist page shows — name, picture, biography, top songs, similar
+artists — for Polyphony's catalogue artist page (the discography stays on `/albums`). Sources, each
+best-effort and cached 6 h per artist: Lidarr's metadata server (name, picture via
+`images.lidarr.audio`, overview); Wikipedia's lead paragraph via the artist's Wikidata link when
+Lidarr has no overview (`www.wikidata.org`, `en.wikipedia.org`); ListenBrainz similar artists
+(`labs.api.listenbrainz.org`, open). **Top songs** come from ListenBrainz's popularity API, which
+since 2025 needs a user token: set `LISTENBRAINZ_TOKEN` (a free ListenBrainz account's token, as a
+sops secret) to enable them; without it `topTracks` is empty and `sources.topTracks` says
+`needs_token`. A failed source empties its section (`sources.* = unavailable`), never the page;
+only an artist no source knows is a 404. Check: `curl -s -H "Authorization: Bearer <token>"
+https://music-api.ault.me/v1/catalog/artists/69158f97-4c07-4c4e-baf8-4e4ab1ed666e | jq .sources`.
+
 **Catalogue artwork** (issue #13, decided 2026-10-21): search, catalogue and request outputs
 never point at third-party hosts; catalogue art is `{PUBLIC_BASE_URL}/v1/artwork?src=<url>[&size=px]`
 (library art stays Subsonic `getCoverArt`). The route is **unauthenticated** on purpose: Coil
