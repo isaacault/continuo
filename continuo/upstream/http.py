@@ -11,7 +11,7 @@ _LIMITS = httpx.Limits(max_connections=10, max_keepalive_connections=5)
 
 
 def client(name: str, *, base_url: str = "", headers: dict | None = None,
-           timeout: float = 30.0) -> httpx.AsyncClient:
+           timeout: float | httpx.Timeout = 30.0) -> httpx.AsyncClient:
     c = _clients.get(name)
     if c is None or c.is_closed:
         c = httpx.AsyncClient(base_url=base_url, headers=headers or {}, timeout=timeout,

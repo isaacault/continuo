@@ -15,6 +15,7 @@ REL = "31765b9f-e969-4257-855f-c7ea1f657b2a"
 CAA = f"https://coverartarchive.org/release-group/{RG}/front-500"
 ARCHIVE = f"https://archive.org/download/mbid-{REL}/mbid-{REL}-1_thumb500.jpg"
 IA = f"https://ia800505.us.archive.org/1/items/mbid-{REL}/mbid-{REL}-1_thumb500.jpg"
+MIRROR = f"https://images.lidarr.audio/cache/{CAA}"
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 200
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 200
 
@@ -98,7 +99,7 @@ def test_http_redirect_is_upgraded_to_https(client, fake):
 def test_redirect_loop_is_bounded(client, fake):
     fake.on("GET", CAA, handler=_redirect(CAA))
     assert client.get("/v1/artwork", params={"src": CAA}).status_code == 502
-    assert len(fake.calls) == artwork.MAX_REDIRECTS + 1
+    assert len(fake.called("GET", CAA)) == artwork.MAX_REDIRECTS + 1
 
 
 # --------------------------------------------------------------------------
@@ -185,6 +186,85 @@ def test_upstream_down_is_a_retryable_502(client, fake):
     assert r.status_code == 502
     assert r.json()["error"] == {"code": "artwork_unavailable", "retryable": True,
                                  "message": "The artwork source is unreachable."}
+
+
+# --------------------------------------------------------------------------
+# archive.org unreachable (issue #15): Lidarr's mirror of Cover Art Archive
+# --------------------------------------------------------------------------
+def _unreachable(req):
+    raise httpx.ConnectTimeout("archive.org timed out", request=req)
+
+
+def test_mirror_url_only_for_caa_images():
+    assert str(artwork.mirror(httpx.URL(CAA))) == MIRROR
+    rel = f"https://coverartarchive.org/release/{REL}/123-250.jpg"
+    assert str(artwork.mirror(httpx.URL(rel))) == f"https://images.lidarr.audio/cache/{rel}"
+    for other in ("https://images.lidarr.audio/cache/abc.jpg",
+                  f"https://coverartarchive.org/release-group/{RG}",           # JSON index
+                  f"{CAA}?x=https://evil.example/", f"{CAA}#frag",
+                  "https://coverartarchive.org/../../etc/passwd"):
+        assert artwork.mirror(httpx.URL(other)) is None, other
+
+
+def test_archive_org_unreachable_falls_back_to_lidarr_mirror(client, fake, monkeypatch):
+    fake.on("GET", CAA, handler=_redirect(ARCHIVE))
+    fake.on("GET", ARCHIVE, handler=_unreachable)
+    fake.on("GET", MIRROR, handler=_image())
+    r = client.get("/v1/artwork", params={"src": CAA})
+    assert r.status_code == 200 and r.content == JPEG
+    assert [str(c.url) for c in fake.calls] == [CAA, ARCHIVE, MIRROR]
+    # Cached under the source the client named, so it's served from disk once archive.org is back.
+    assert os.listdir(artwork.cache_dir()) == [artwork.cache_key(httpx.URL(CAA))]
+
+    # While archive.org is down, the next cover goes to the mirror first: no connect timeout.
+    other = CAA.replace("front-500", "front-250")
+    fake.on("GET", f"https://images.lidarr.audio/cache/{other}", handler=_image(PNG, "image/png"))
+    fake.calls.clear()
+    assert client.get("/v1/artwork", params={"src": other}).status_code == 200
+    assert [str(c.url) for c in fake.calls] == [f"https://images.lidarr.audio/cache/{other}"]
+
+    # Later, Cover Art Archive itself is tried first again.
+    third = CAA.replace("front-500", "front-1200")
+    fake.on("GET", third, handler=_image())
+    now = artwork.time.monotonic()
+    monkeypatch.setattr(artwork.time, "monotonic", lambda: now + 601)
+    fake.calls.clear()
+    assert client.get("/v1/artwork", params={"src": third}).status_code == 200
+    assert [str(c.url) for c in fake.calls] == [third]
+
+
+def test_caa_404_is_final_the_mirrors_is_not(client, fake):
+    fake.on("GET", CAA, status=404)
+    assert client.get("/v1/artwork", params={"src": CAA}).status_code == 404
+    assert fake.called("GET", MIRROR) == []                 # no art: the mirror isn't asked
+
+    # Mirror first (after a failure) and the mirror says 404: Cover Art Archive decides.
+    other = CAA.replace("front-500", "front-250")
+    fake.on("GET", other, handler=_unreachable)
+    fake.on("GET", f"https://images.lidarr.audio/cache/{other}", handler=_image())
+    assert client.get("/v1/artwork", params={"src": other}).status_code == 200
+    third = CAA.replace("front-500", "front-1200")
+    fake.on("GET", f"https://images.lidarr.audio/cache/{third}", status=404)
+    fake.on("GET", third, handler=_image(PNG, "image/png"))
+    r = client.get("/v1/artwork", params={"src": third})
+    assert r.status_code == 200 and r.content == PNG
+
+
+def test_caa_and_mirror_both_down_is_a_retryable_502(client, fake):
+    fake.on("GET", CAA, handler=_unreachable)
+    fake.on("GET", MIRROR, handler=_image(b"<html>cloudflare error</html>", "text/html"))
+    r = client.get("/v1/artwork", params={"src": CAA})
+    assert r.status_code == 502
+    assert r.json()["error"]["code"] == "artwork_unavailable" and r.json()["error"]["retryable"]
+    assert not os.path.isdir(artwork.cache_dir()) or os.listdir(artwork.cache_dir()) == []
+    assert not artwork.known_missing(artwork.cache_key(httpx.URL(CAA)))
+
+
+def test_no_mirror_for_lidarr_images(client, fake):
+    src = "https://images.lidarr.audio/cache/abc.jpg"
+    fake.on("GET", src, handler=_unreachable)
+    assert client.get("/v1/artwork", params={"src": src}).status_code == 502
+    assert [str(c.url) for c in fake.calls] == [src]
 
 
 def test_disk_cache_evicts_least_recently_used(fake, monkeypatch):

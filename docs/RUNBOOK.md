@@ -228,7 +228,14 @@ catch-all `handle` already proxies `/v1/*`). It is not an open proxy: `src` must
 by hand (max 5) and only to those or `archive.org` / `*.archive.org` (CAA → 307 archive.org → 302
 `iaNNN.us.archive.org`), http redirects upgraded to https; only jpeg/png/webp/gif (type header
 and magic bytes), at most `ARTWORK_MAX_BYTES` (10 MB); upstream fetches are rate-limited per
-client (300/min). `size` picks CAA's 250/500/1200 thumbnail. Responses: `Cache-Control: public,
+client (300/min). `size` picks CAA's 250/500/1200 thumbnail. **archive.org fallback** (issue #15,
+decided 2026-10-21): every CAA image goes through archive.org's front door, which sometimes goes dark
+(an 8 s ConnectTimeout was seen from the Jetson; DNS, route and IPv4 were fine, and there's no
+AAAA). So when the direct chain fails (connect timeout 4 s), continuo fetches Lidarr's cached copy
+`https://images.lidarr.audio/cache/<CAA URL>` (Cloudflare; same bytes and sizes, 404 for no art).
+It then tries that mirror first for 10 min (log line `using Lidarr's mirror first`). CAA's own 404 is
+final; the mirror's isn't. CAA's JSON index doesn't help here: it also redirects through
+archive.org. Responses: `Cache-Control: public,
 max-age=604800` + ETag. Disk cache: `/data/artwork` (`ARTWORK_CACHE_DIR`), capped at
 `ARTWORK_CACHE_MB` (200), least-recently-used files evicted down to 90 %; upstream 404s ("no
 art") are remembered in memory for an hour. The cache is disposable (`rm -rf

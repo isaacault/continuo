@@ -12,6 +12,12 @@ It must not become an open proxy:
 - only image bodies (content type and magic bytes both jpeg/png/webp/gif; never svg), at most
   ARTWORK_MAX_BYTES, unencoded (content-encoding refused, so no decompression bombs).
 
+Cover Art Archive images all go through archive.org's front door, which goes dark now and then
+(issue #15). For a well-formed CAA image URL, Lidarr's image cache (CAA_MIRROR) is the fallback:
+`images.lidarr.audio/cache/<CAA URL>` serves the same bytes and sizes from Cloudflare and 404s
+what CAA doesn't have. The mirror URL is built here, never taken from the client, and it goes
+through the same checks.
+
 The original upstream URL is what's stored (requests.artwork_url) and normalised (imageUrl);
 the rewrite to continuo's URL happens only on output, so a changed PUBLIC_BASE_URL never leaves
 stale links in the database.
@@ -38,6 +44,11 @@ SOURCE_HOSTS = frozenset({"coverartarchive.org", "images.lidarr.audio", "imageca
 REDIRECT_DOMAINS = ("archive.org",)
 MAX_REDIRECTS = 5
 
+# Lidarr's cache of Cover Art Archive (what Lidarr's metadata server hands out for album art).
+CAA_MIRROR = "https://images.lidarr.audio/cache/"
+# After the direct CAA chain fails, try the mirror first for this long.
+_DIRECT_DEGRADED_TTL = 600.0
+
 _IMAGE_TYPES = {"image/jpeg": "image/jpeg", "image/jpg": "image/jpeg", "image/pjpeg": "image/jpeg",
                 "image/png": "image/png", "image/webp": "image/webp", "image/gif": "image/gif"}
 
@@ -50,6 +61,7 @@ _CAA_PATH = re.compile(
 # Sources that answered 404 (an album without art is common): don't ask again for an hour.
 _MISSING_TTL = 3600.0
 _missing: dict[str, float] = {}
+_degraded = {"until": 0.0}
 
 
 class Refused(Exception):
@@ -113,6 +125,14 @@ def sized(url: httpx.URL, size: Optional[int]) -> httpx.URL:
         return url
     px = next((s for s in _CAA_SIZES if s >= size), _CAA_SIZES[-1])
     return url.copy_with(path=f"{m.group(1)}-{px}{m.group(2) or ''}")
+
+
+def mirror(url: httpx.URL) -> Optional[httpx.URL]:
+    """Lidarr's cached copy of a Cover Art Archive image URL; None for anything else."""
+    if (url.host.lower() != "coverartarchive.org" or url.query or url.fragment
+            or not _CAA_PATH.match(url.path)):
+        return None
+    return httpx.URL(CAA_MIRROR + str(url))
 
 
 def proxyable(src: Optional[str]) -> bool:
@@ -237,6 +257,7 @@ def reset() -> None:
     """Tests: forget the in-memory accounting and the 404 memory."""
     _state.update({"dir": None, "total": None})
     _missing.clear()
+    _degraded["until"] = 0.0
 
 
 # --------------------------------------------------------------------------
@@ -256,7 +277,9 @@ def sniff(data: bytes) -> Optional[str]:
 
 
 def _client() -> httpx.AsyncClient:
-    return http.client("artwork", timeout=15.0, headers={
+    # A short connect timeout: an unreachable host must leave time for the mirror before the
+    # client (OkHttp: 10 s) gives up.
+    return http.client("artwork", timeout=httpx.Timeout(8.0, connect=4.0), headers={
         "User-Agent": config.settings.musicbrainz_user_agent,
         "Accept": "image/*",
         "Accept-Encoding": "identity",
@@ -311,3 +334,36 @@ async def fetch(url: httpx.URL) -> tuple[bytes, str]:
                 raise Unusable("body is not an image")
             return data, kind
     raise Refused("too many redirects")
+
+
+async def fetch_image(url: httpx.URL) -> tuple[bytes, str]:
+    """fetch(), falling back to Lidarr's mirror for Cover Art Archive images. CAA's own 404 is
+    final, the mirror's isn't. When both fail, the direct attempt's error is raised. After a
+    direct failure the mirror goes first for _DIRECT_DEGRADED_TTL, so an archive.org outage
+    doesn't cost every cover a connect timeout."""
+    alt = mirror(url)
+    if alt is None:
+        return await fetch(url)
+    degraded = _degraded["until"] > time.monotonic()
+    direct_error: Optional[Exception] = None
+    for u in ((alt, url) if degraded else (url, alt)):
+        try:
+            result = await fetch(u)
+        except NotFound:
+            if u is url:
+                raise
+            continue
+        except (Refused, Unusable, httpx.HTTPError) as e:
+            if u is url:
+                direct_error = e
+                if not degraded:
+                    log.warning("artwork: Cover Art Archive failed (%s: %s), using Lidarr's "
+                                "mirror first for %d min", type(e).__name__, e,
+                                _DIRECT_DEGRADED_TTL // 60)
+                _degraded["until"] = time.monotonic() + _DIRECT_DEGRADED_TTL
+            continue
+        if u is url:
+            _degraded["until"] = 0.0
+        return result
+    assert direct_error is not None  # the direct attempt either returned or raised NotFound
+    raise direct_error
