@@ -45,7 +45,8 @@ def _album_availability(album: dict, index: merge._LibraryIndex, requests: dict)
         mine = index.mine(lib)
         if mine is None:
             return merge.on_server(lib)
-        return {"state": "in_library", "navidromeAlbumId": mine, "trackCount": lib.get("song_count")}
+        return index.album_view(mine, {"state": "in_library", "navidromeAlbumId": mine,
+                                       "trackCount": lib.get("song_count")})
     if rg in requests:
         return merge._request_availability(requests[rg])
     if album.get("owned"):

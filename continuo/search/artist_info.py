@@ -50,6 +50,7 @@ def _top_track(t: dict, albums_by_title: dict[str, dict], index: _LibraryIndex,
     rg = (album or {}).get("musicBrainzReleaseGroupId")
     lib = index.find(rg, [t["releaseMbid"]] if t.get("releaseMbid") else [],
                      album_key(t.get("artist"), t.get("releaseName")), t.get("releaseName"), artist_mbid)
+    lib = index.song_album(lib, t.get("recordingMbid"))
     mine = index.mine(lib) if lib is not None else None
     if lib is not None and mine is None:
         availability = {**on_server(lib), "via": "album"}

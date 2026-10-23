@@ -18,7 +18,7 @@ from .. import config
 from ..db import library as lib_db
 from ..db import requests as req_db
 from ..db.conn import now, seconds_since
-from ..library import ownership
+from ..library import ownership, singles
 from ..notify import dispatch
 from ..requests import matching, orchestrate
 from ..upstream import lidarr, navidrome, slskd
@@ -103,7 +103,8 @@ async def try_match(row: dict) -> matching.Match:
         except httpx.HTTPError:
             pass
     paths = await _paths_for(row)
-    return matching.match(row, lib_db.all_albums(), lidarr_album=lidarr_album, paths=paths)
+    # Never a singles folder (#24): it carries the album's tags but isn't the album.
+    return matching.match(row, singles.whole(lib_db.all_albums()), lidarr_album=lidarr_album, paths=paths)
 
 
 async def _observe_scans() -> bool:
@@ -162,6 +163,8 @@ async def tick() -> None:
             if mine:
                 m.navidrome_album_id = mine
             await mark_available(row, m)
+            # Its single songs (#24) come with the whole album now.
+            singles.absorb(row.get("mb_release_group_id"), store_album.get("folder"))
             continue
         if m.ambiguous:
             await attention(row, "ambiguous_match",

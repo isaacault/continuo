@@ -10,6 +10,7 @@ from ..db import library as lib_db
 from ..db import requests as req_db
 from ..db import users as users_db
 from ..errors import ApiError, UpstreamError
+from ..library import singles
 from ..requests import orchestrate, pipeline, view
 from ..upstream import lidarr
 from .schemas import RequestIn
@@ -68,7 +69,7 @@ async def _create_track(body: RequestIn, user: CurrentUser) -> dict:
     album = req_db.by_release_group(rg)
     if album and album["status"] in req_db.ACTIVE:
         raise ApiError(409, "already_requested", "Its whole album is already requested.", requestId=album["id"])
-    in_lib = lib_db.by_release_group(rg)
+    in_lib = singles.whole(lib_db.by_release_group(rg))
     if in_lib:
         await _already_on_server(user, in_lib[0])
     try:
@@ -94,7 +95,7 @@ async def create_request(body: RequestIn, user: CurrentUser = Depends(require_us
     if existing and existing["status"] in req_db.ACTIVE:
         raise ApiError(409, "already_requested", "That album is already requested.",
                        requestId=existing["id"])
-    in_lib = lib_db.by_release_group(rg)
+    in_lib = singles.whole(lib_db.by_release_group(rg))
     if in_lib:
         await _already_on_server(user, in_lib[0])
     try:
@@ -105,7 +106,7 @@ async def create_request(body: RequestIn, user: CurrentUser = Depends(require_us
         raise ApiError(404, "not_found", "That album isn't in Lidarr's catalogue.")
     album = lidarr.normalize_album(info)
     if album["releaseIds"]:
-        lib = lib_db.by_release_ids(album["releaseIds"])
+        lib = singles.whole(lib_db.by_release_ids(album["releaseIds"]))
         if lib:
             await _already_on_server(user, lib[0])
     row = req_db.create(mb_release_group_id=rg, title=album["title"], artist=album["artist"],
