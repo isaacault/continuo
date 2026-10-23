@@ -1,4 +1,5 @@
-"""continuo CLI: migrate, create-user, set-role, import-lidseeker, backup, policy-check, refresh-library.
+"""continuo CLI: migrate, create-user, set-role, merge-artist, import-lidseeker, backup, policy-check,
+refresh-library.
 
 Run inside the container: `docker exec -it continuo continuo <command>`."""
 import argparse
@@ -37,6 +38,49 @@ def cmd_set_role(args) -> int:
         return 1
     users.set_role(u["id"], args.role)
     print(f"{args.username} is now {args.role}")
+    return 0
+
+
+def cmd_merge_artist(args) -> int:
+    """File every album Navidrome lists under [name] (e.g. 青葉市子, as Lidarr tagged an import)
+    under the library's [into] (Ichiko Aoba): rewrite those files' artist and album artist tags,
+    then rescan. Only the albums listed under [name] are touched."""
+    import asyncio
+
+    from .db import library as lib_db
+    from .library import cache, tags
+    from .requests.normalise import normalise
+    from .upstream import navidrome
+    _migrate()
+    try:
+        music = cache.music_dir()
+    except cache.Unavailable:
+        print("MUSIC_DIR isn't set or mounted", file=sys.stderr)
+        return 1
+    if args.mbid:
+        # Saved first: with nothing to retag yet, future imports still get the library's name.
+        from .db import identity
+        identity.set_library_name(args.mbid, args.into)
+    albums = [a for a in lib_db.all_albums() if normalise(a.get("artist")) == normalise(args.name)]
+    if not albums:
+        print(f"no albums by {args.name!r} in the library index (run refresh-library first?)", file=sys.stderr)
+        return 1
+    changed = 0
+    for a in albums:
+        if not a.get("folder"):
+            print(f"  skipped {a['name']!r}: folder unknown", file=sys.stderr)
+            continue
+        folder = os.path.realpath(os.path.join(music, a["folder"]))
+        if not folder.startswith(music + os.sep):
+            continue
+        n = tags.rename_artist(tags.audio_files(folder), {args.name}, args.into)
+        changed += n
+        print(f"  {a['name']}: {n} file(s)")
+    try:
+        asyncio.run(navidrome.start_scan())
+    except Exception as e:  # noqa: BLE001
+        print(f"rescan didn't start ({e}); Navidrome's watcher will catch up", file=sys.stderr)
+    print(f"{changed} file(s) now by {args.into}")
     return 0
 
 
@@ -221,6 +265,11 @@ def main(argv: list[str] | None = None) -> int:
     sr.add_argument("username")
     sr.add_argument("role", choices=("admin", "user"))
     sr.set_defaults(fn=cmd_set_role)
+    ma = sub.add_parser("merge-artist", help="file albums tagged with one artist name under another")
+    ma.add_argument("name", help="the name the albums carry now (e.g. as Lidarr tagged them)")
+    ma.add_argument("--into", required=True, help="the library's name for the artist")
+    ma.add_argument("--mbid", help="the MusicBrainz artist id, so future imports use --into too")
+    ma.set_defaults(fn=cmd_merge_artist)
     il = sub.add_parser("import-lidseeker")
     il.add_argument("path")
     il.add_argument("--no-match", action="store_true",

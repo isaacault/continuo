@@ -42,13 +42,13 @@ async def _upstream(mbid: str) -> dict:
 
 
 def _top_track(t: dict, albums_by_title: dict[str, dict], index: _LibraryIndex,
-               requests: dict[str, dict]) -> dict:
+               requests: dict[str, dict], artist_mbid: Optional[str] = None) -> dict:
     """One top song with its album: matched to the artist's release groups by title, and to the
     library by release, release group or name."""
     album = albums_by_title.get(normalise(t.get("releaseName")))
     rg = (album or {}).get("musicBrainzReleaseGroupId")
     lib = index.find(rg, [t["releaseMbid"]] if t.get("releaseMbid") else [],
-                     album_key(t.get("artist"), t.get("releaseName")), t.get("releaseName"))
+                     album_key(t.get("artist"), t.get("releaseName")), t.get("releaseName"), artist_mbid)
     if lib is not None:
         availability = {"state": "album_in_library", "navidromeAlbumId": lib["navidrome_id"]}
     elif rg and rg in requests:
@@ -92,7 +92,7 @@ async def build(mbid: str) -> Optional[dict]:
             albums = []  # songs without a release group can't be requested, but still show
         for a in albums:
             albums_by_title.setdefault(normalise(a.get("title")), a)
-        top_tracks = [_top_track(t, albums_by_title, index, requests) for t in up["top"]]
+        top_tracks = [_top_track(t, albums_by_title, index, requests, mbid) for t in up["top"]]
 
     similar = None
     if up["similar"] is not None:

@@ -233,6 +233,12 @@ streamed and prefetched music ("play now", #12) under one eviction policy. Refus
 with another album, an artist root, anything outside `MUSIC_DIR`. Restic's music backup includes
 the cache, so a removed album also survives in older snapshots. Check: `ls -la
 /ssd/data/media/music/.continuo-cache` after a removal; `GET /v1/library/removed`.
+**Which artist a library artist is** (decided 2026-10-23): files without MusicBrainz tags (e.g.
+the Peach Pit albums, which bypassed Lidarr's tagging) give Navidrome artists no MBID, and names are
+ambiguous (four "Peach Pit"s in MusicBrainz). `GET /v1/catalog/artists/resolve?name=` picks among
+same-name catalogue artists: one already in Lidarr, else the one whose discography shares the most
+album titles with the library's albums by that name, else Lidarr's order. Polyphony's artist page
+uses it before loading the discography.
 
 **Catalogue artist pages** (decided 2026-10-22, the user's choice): `GET /v1/catalog/artists/{mbid}`
 gives any artist what a library artist page shows — name, picture, biography, top songs, similar

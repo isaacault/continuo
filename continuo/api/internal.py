@@ -16,6 +16,7 @@ from ..db import requests as req_db
 from ..db.conn import now
 from ..errors import ApiError
 from ..requests import orchestrate
+from ..requests.normalise import normalise
 from ..upstream import homeassistant
 from ..workers import scan
 from .schemas import SearchEventIn
@@ -153,6 +154,7 @@ async def _on_import(payload: dict, rows: list[dict]) -> None:
                 message=f"{title} — {artist}: an upgrade replaced files. Check the quality "
                         "profile's 'Upgrades Allowed'.", tag="continuo-upgrade", kind="policy")
         return
+    await _file_under_library_name(payload.get("artist") or {}, paths)
     for row in rows:
         merged = sorted(set(row.get("import_paths") or []) | set(paths))
         req_db.update(row["id"], import_paths=merged, imported_at=now(),
@@ -164,6 +166,29 @@ async def _on_import(payload: dict, rows: list[dict]) -> None:
     if rows:
         # Navidrome's watcher usually beats us; check right away rather than at the next tick.
         asyncio.get_running_loop().create_task(_scan_soon())
+
+
+async def _file_under_library_name(artist: dict, paths: list[str]) -> None:
+    """An album Lidarr imported for an artist the library knows by another name (Ichiko Aoba
+    for 青葉市子): retag it with the library's name before Navidrome indexes it, so it joins the
+    library's artist instead of becoming a second one. Best effort; needs MUSIC_DIR."""
+    from ..library import cache, tags
+    from ..search import resolve
+    mb_name = artist.get("name")
+    try:
+        lib_name = await resolve.library_name_for(artist.get("mbid") or artist.get("foreignartistid"), mb_name)
+        if not lib_name or normalise(lib_name) == normalise(mb_name):
+            return
+        music = cache.music_dir()
+    except cache.Unavailable:
+        log.warning("import: %s is %s in the library, but MUSIC_DIR isn't mounted to retag it", mb_name, lib_name)
+        return
+    except Exception:  # noqa: BLE001 — never fail the webhook over this
+        log.exception("import: library name lookup failed")
+        return
+    files = [p for p in (tags.library_path(x, music) for x in paths) if p]
+    changed = await asyncio.to_thread(tags.rename_artist, files, {mb_name or ""}, lib_name)
+    log.info("import: filed %d file(s) by %s under the library's %s", changed, mb_name, lib_name)
 
 
 async def _scan_soon() -> None:
