@@ -74,6 +74,22 @@ def test_grant_gives_access_to_the_own_library_alone(media):
     assert granted == [{"libraryIds": [2]}]
 
 
+def test_revert_puts_the_account_back_on_the_store(media):
+    *_, granted = media
+    isaac = make_user("isaac", role="user")
+    asyncio.run(accounts.grant_only_own(isaac))
+    asyncio.run(accounts.revert(isaac))
+    assert granted[-1] == {"libraryIds": [1]} and acc_db.get(isaac["id"]) is None
+
+
+def test_init_waits_for_as_many_albums_as_the_store_has_there(media):
+    isaac = make_user("isaac", role="user")
+    lib_db.upsert_many([{"navidrome_id": "s-3", "name": "0 (Live)", "artist": "Ichiko Aoba",
+                         "folder": "Ichiko Aoba/0", "norm_key": "c", "library_id": 1}])
+    out = asyncio.run(accounts.init(isaac, everything=True))
+    assert out["albums"] == 2 and out["expected"] == 3, "two albums share Ichiko Aoba/0"
+
+
 def test_a_new_account_starts_empty(media):
     store, libs, created, _ = media
     guest = make_user("guest", role="user")

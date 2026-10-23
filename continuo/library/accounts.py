@@ -84,5 +84,21 @@ async def init(user: dict, everything: bool) -> dict:
         added = members_db.add_many(user["id"], folders, "migration")
     store, libs = links.roots()
     stats = links.sync_user(user, store, libs)
-    return {"library": lib_id, "added": added, "albums": len(members_db.folders(user["id"])),
+    mine = members_db.folders(user["id"])
+    # What Navidrome should index there: as many albums as the store has in those folders (one
+    # folder can hold two albums).
+    expected = sum(1 for a in lib_db.all_albums() if a.get("folder") in mine)
+    return {"library": lib_id, "added": added, "albums": len(mine), "expected": expected,
             "linked": stats.linked, "relinked": stats.relinked, "removed": stats.removed}
+
+
+async def revert(user: dict) -> None:
+    """Back to the shared store: the account sees the store library again and continuo stops
+    treating it as having its own (its library folder and list stay, for another go)."""
+    nd_user = await navidrome_user(users_db.navidrome_name(user))
+    if nd_user is None:
+        raise LookupError(f"no Navidrome user {users_db.navidrome_name(user)!r}")
+    await navidrome.native_send("PUT", f"user/{nd_user['id']}/library",
+                                {"libraryIds": [config.settings.store_library_id]})
+    acc_db.delete(user["id"])
+    log.info("libraries: %s is back on the shared store library", user["username"])
