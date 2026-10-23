@@ -300,6 +300,30 @@ async def _catalog_artists(q: str) -> list[dict]:
     return await cached(_catalog_cache, ("artist", _norm_term(q)), lambda: lidarr.search_artists(q))
 
 
+async def _add_renamed_library_artists(library: dict, catalog: list[dict], navidrome_user: str) -> None:
+    """Searching フィッシュマンズ finds the catalogue artist, but the library knows them as
+    Fishmans (artist_names), so Navidrome's own search missed them: fetch those library artists
+    by their library name, so merge_artists folds the two into one."""
+    from ..db import identity
+    names = identity.library_names()
+    have = {normalise(a.get("name")) for a in library.get("artist") or []}
+    wanted = []
+    for c in catalog:
+        name = names.get(c.get("musicBrainzArtistId"))
+        if name and normalise(name) not in have and name not in wanted:
+            wanted.append(name)
+    for name in wanted[:3]:
+        try:
+            found = await navidrome.search3(name, navidrome_user, artists=3, albums=0, songs=0)
+        except Exception:  # noqa: BLE001 — the catalogue result still shows
+            continue
+        for a in found.get("artist") or []:
+            if normalise(a.get("name")) == normalise(name):
+                library.setdefault("artist", []).append(a)
+                have.add(normalise(name))
+                break
+
+
 async def unified_search(q: str, types: tuple[str, ...], limit: int,
                          navidrome_user: str) -> dict:
     want = set(types)
@@ -337,6 +361,9 @@ async def unified_search(q: str, types: tuple[str, ...], limit: int,
     cat_albums = [] if isinstance(cat_albums, BaseException) else cat_albums
     cat_artists = [] if isinstance(cat_artists, BaseException) else cat_artists
     cat_tracks = [] if isinstance(cat_tracks, BaseException) else cat_tracks
+
+    if "artist" in want and cat_artists and not isinstance(library, BaseException):
+        await _add_renamed_library_artists(library, cat_artists, navidrome_user)
 
     index = _LibraryIndex(lib_db.all_albums())
     requests = req_db.active_by_release_group()

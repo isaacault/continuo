@@ -299,6 +299,19 @@ async def find_album_by_foreign_id(foreign_album_id: Optional[str]) -> Optional[
     return None
 
 
+async def imported_paths(artist_id: int) -> list[tuple[str, str]]:
+    """(droppedPath, importedPath) of every file Lidarr imported for this artist: where it came
+    from (a downloads folder, or a manual import of the user's own files) and where it went."""
+    r = await _client().get("/history/artist", params={"artistId": artist_id, "eventType": "trackFileImported"})
+    r.raise_for_status()
+    out = []
+    for e in r.json() or []:
+        d = e.get("data") or {}
+        if d.get("importedPath"):
+            out.append((d.get("droppedPath") or "", d["importedPath"]))
+    return out
+
+
 async def set_album_monitored(album_ids: list[int], monitored: bool = True) -> None:
     r = await _client().put("/album/monitor", json={"albumIds": album_ids, "monitored": monitored})
     r.raise_for_status()

@@ -234,6 +234,17 @@ streamed and prefetched music ("play now", #12) under one eviction policy. Refus
 with another album, an artist root, anything outside `MUSIC_DIR`. Restic's music backup includes
 the cache, so a removed album also survives in older snapshots. Check: `ls -la
 /ssd/data/media/music/.continuo-cache` after a removal; `GET /v1/library/removed`.
+**Latin names for non-Latin artists** (decided 2026-10-23 with the user): with `NAME_LOCALE=en`
+(default; `original` turns it off), an artist whose MusicBrainz name isn't Latin script gets
+MusicBrainz's *primary alias for that language* as its library name, and MusicBrainz's sort name
+(青葉市子 -> Ichiko Aoba, sorted "Aoba, Ichiko"; フィッシュマンズ -> Fishmans). Nothing is transliterated:
+no such alias, no change. New imports are tagged so at the Lidarr webhook (artist, album artist and
+their sort tags); albums already there: `docker exec continuo continuo latin-names` previews and
+`--apply` retags **only albums Lidarr downloaded** (its history shows the files imported from
+`LIDARR_DOWNLOADS_PATH`, `/data/downloads`), listing the user's own copies as left alone. The
+original name is kept (`GET /v1/library/artist-names`) so Polyphony shows both, and searching the
+original script finds the library artist.
+
 **Which artist a library artist is** (decided 2026-10-23): files without MusicBrainz tags (e.g.
 the Peach Pit albums, which bypassed Lidarr's tagging) give Navidrome artists no MBID, and names are
 ambiguous (four "Peach Pit"s in MusicBrainz). `GET /v1/catalog/artists/resolve?name=` picks among

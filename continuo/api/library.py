@@ -21,6 +21,16 @@ def require_remover(user: CurrentUser = Depends(require_user)) -> CurrentUser:
     return user
 
 
+@router.get("/artist-names")
+async def artist_names(_user: CurrentUser = Depends(require_user)) -> list[dict]:
+    """Artists the library knows by another name than their original (Ichiko Aoba / 青葉市子):
+    for showing both and searching either."""
+    from ..db import identity
+    return [{"name": r["library_name"], "originalName": r["original_name"], "sortName": r["sort_name"],
+             "musicBrainzArtistId": r["mb_artist_id"]}
+            for r in identity.artist_names() if r["original_name"]]
+
+
 @router.post("/albums/{navidrome_id}/remove")
 async def remove_album(navidrome_id: str, user: CurrentUser = Depends(require_remover)) -> dict:
     """Move the album into the media cache: gone from the library, restorable until evicted."""

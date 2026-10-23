@@ -23,9 +23,10 @@ def library_path(lidarr_path: str, music_dir: str) -> str | None:
     return out if out.startswith(music_dir + os.sep) else None
 
 
-def rename_artist(paths: list[str], from_names: set[str], to: str) -> int:
-    """Replace artist / album artist values equal to one of [from_names] (normalised) with [to].
-    Returns how many files changed. Collaborations ("A & B") are left alone."""
+def rename_artist(paths: list[str], from_names: set[str], to: str, sort: str | None = None) -> int:
+    """Replace artist / album artist values equal to one of [from_names] (normalised) with [to],
+    and set the matching sort tag to [sort] when given. Returns how many files changed.
+    Collaborations ("A & B") are left alone."""
     import mutagen
     keys = {normalise(n) for n in from_names}
     changed = 0
@@ -44,6 +45,11 @@ def rename_artist(paths: list[str], from_names: set[str], to: str) -> int:
             if new != values:
                 f.tags[field] = new
                 dirty = True
+                if sort:
+                    try:
+                        f.tags[field + "sort"] = [sort]
+                    except (KeyError, ValueError):  # a format without that tag in mutagen's easy names
+                        pass
         if dirty:
             f.save()
             changed += 1
