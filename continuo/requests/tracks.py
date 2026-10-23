@@ -1,12 +1,16 @@
-"""Single-song requests (#24): one song from Soulseek, filed into its album.
+"""Single-song requests (#24): one song from Soulseek, filed under its album.
 
 Lidarr only deals in whole albums, so a track request never touches it. The track loop takes
 each request through: searching (slskd, the best copy by Soularr's format order; nobody has it
 → again later, on a backoff, "still looking") → downloading (following the slskd transfer; a
-copy that fails or stalls is skipped for the next) → scanning (the file moved into its album's
-folder in the store, under the library's naming, tagged from MusicBrainz; Navidrome scans) →
-available once Navidrome shows the song, in the requester's library (#27). The album then reads
-"1 of N"; requesting the album later lets Lidarr find the song already there."""
+copy that fails or stalls is skipped for the next) → scanning (the file moved to
+<SINGLES_FOLDER>/<Album Artist>/<Album>/ in the store, under the library's naming, tagged from
+MusicBrainz; Navidrome scans) → available once Navidrome shows the song, in the requester's
+library (#27). The album then reads "1 of N" (library/singles).
+
+Lidarr never sees single songs: the singles folder isn't an artist folder of its root, so an
+album is always whole or absent to Lidarr, and requesting it later is an ordinary whole-album
+download; when it arrives, its singles go (library/singles.absorb)."""
 import logging
 import os
 import re
@@ -20,7 +24,7 @@ from ..db import library as lib_db
 from ..db import requests as req_db
 from ..db.conn import now, parse_ts, seconds_since
 from ..fetch import soulseek
-from ..library import naming, ownership, tags
+from ..library import naming, ownership, singles, tags
 from ..library.cache import Unavailable, music_dir
 from ..upstream import navidrome
 from . import matching, normalise
@@ -69,17 +73,15 @@ async def prepare(recording_id: str, album_rg: str) -> dict:
         "releaseId": album.get("releaseId"), "imageUrl": album.get("imageUrl"),
         "position": (pos or {}).get("position"), "disc": (pos or {}).get("discNumber") or 1,
         "discs": max((t.get("discNumber") or 1 for t in tracks), default=1),
+        "trackCount": len(tracks) or None,
     }
 
 
 def album_folder(row: dict) -> str:
-    """Where the song goes, relative to the store: its album's folder when the store has the
-    album, else <Album Artist>/<Album>, as Lidarr files albums here."""
+    """Where the song goes, relative to the store: <SINGLES_FOLDER>/<Album Artist>/<Album>."""
     t = row["track"]
-    have = lib_db.by_release_group(row["album_release_group_id"]) if row.get("album_release_group_id") else []
-    if have and have[0].get("folder"):
-        return have[0]["folder"]
-    return f"{_safe(t.get('albumArtist'), 'Unknown Artist')}/{_safe(t.get('albumTitle'), 'Unknown Album')}"
+    return (f"{singles.root()}/{_safe(t.get('albumArtist'), 'Unknown Artist')}"
+            f"/{_safe(t.get('albumTitle'), 'Unknown Album')}")
 
 
 def file_name(t: dict, ext: str) -> str:
@@ -226,7 +228,7 @@ async def _file(row: dict, path: str) -> dict:
         return row
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     if os.path.exists(dest):
-        os.remove(path)          # the album already has this song: keep the library's copy
+        os.remove(path)          # already there (requested before): keep that copy
     else:
         tags.write_track_tags(path, {
             "title": t.get("title"), "artist": t.get("artist"), "album": t.get("albumTitle"),
@@ -245,20 +247,7 @@ async def _file(row: dict, path: str) -> dict:
         await navidrome.start_scan()
     except Exception as e:  # noqa: BLE001 — the watcher picks it up anyway
         log.warning("track %s: scan didn't start: %s", row["id"], e)
-    await _tell_lidarr(row)
     return row
-
-
-async def _tell_lidarr(row: dict) -> None:
-    """Lidarr keeps the albums: when it knows the artist, a rescan records the song as a file of
-    its album, so requesting the album later downloads only what's missing. Best effort."""
-    from ..upstream import lidarr
-    try:
-        artist = await lidarr.find_library_artist(row["track"].get("albumArtistId"))
-        if artist:
-            await lidarr.run_command("RefreshArtist", wait=False, artistId=artist["id"])
-    except Exception as e:  # noqa: BLE001 — Lidarr's own rescans catch up
-        log.warning("track %s: Lidarr rescan failed: %s", row["id"], e)
 
 
 async def _attention(row: dict, reason: str, detail: str) -> None:

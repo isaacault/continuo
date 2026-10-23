@@ -88,9 +88,12 @@ async def remove(navidrome_id: str, by_user: str) -> dict:
             raise ApiError(409, "shared_folder", "Another album shares this folder, so it can't be removed on its own.")
         base = cache.cache_dir()
 
-        # Lidarr first: an album left monitored would only be downloaded again.
+        # Lidarr first: an album left monitored would only be downloaded again. Single songs
+        # (#24) are none of Lidarr's business: its album may well be requested right now.
+        from . import singles
         try:
-            lid = await lidarr.find_album_by_foreign_id(album.get("mbz_release_group_id"))
+            lid = None if singles.is_singles(album.get("folder")) else \
+                await lidarr.find_album_by_foreign_id(album.get("mbz_release_group_id"))
         except httpx.HTTPError as e:
             raise ApiError(502, "lidarr_unavailable", "Lidarr isn't answering, so the album wasn't removed.",
                            retryable=True) from e

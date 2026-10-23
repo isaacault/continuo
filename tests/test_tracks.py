@@ -101,18 +101,18 @@ def test_found_downloaded_filed_and_available(client, setup, monkeypatch):
     state["t"] = {"state": "Completed, Succeeded", "id": "t1"}
     asyncio.run(tracks.tick())
     row = req_db.get(rid)
-    assert row["status"] == "scanning" and row["file_path"] == "Peach Pit/Being So Normal/02 Drop the Guillotine.flac"
-    assert (store / "Peach Pit" / "Being So Normal" / "02 Drop the Guillotine.flac").read_bytes() == b"audio"
+    assert row["status"] == "scanning" and row["file_path"] == "_singles/Peach Pit/Being So Normal/02 Drop the Guillotine.flac"
+    assert (store / "_singles" / "Peach Pit" / "Being So Normal" / "02 Drop the Guillotine.flac").read_bytes() == b"audio"
     assert tagged[0]["tracknumber"] == 2 and tagged[0]["musicbrainz_trackid"] == REC
     assert tagged[0]["album"] == "Being So Normal" and tagged[0]["musicbrainz_releasegroupid"] == RG
 
     async def refresh():
         lib_db.upsert_many([{"navidrome_id": "nd-bsn", "name": "Being So Normal", "artist": "Peach Pit",
-                             "folder": "Peach Pit/Being So Normal", "norm_key": "k", "library_id": 1}])
+                             "folder": "_singles/Peach Pit/Being So Normal", "norm_key": "k", "library_id": 1}])
         return {}
 
     async def paths(album_id, limit=1):
-        return ["Peach Pit/Being So Normal/02 Drop the Guillotine.flac"]
+        return ["_singles/Peach Pit/Being So Normal/02 Drop the Guillotine.flac"]
     from continuo.workers import index
     monkeypatch.setattr(index, "refresh", refresh)
     monkeypatch.setattr(navidrome, "album_song_paths", paths)
@@ -121,11 +121,11 @@ def test_found_downloaded_filed_and_available(client, setup, monkeypatch):
     assert row["status"] == "available" and row["navidrome_album_id"] == "nd-bsn"
 
 
-def test_an_album_already_in_the_store_gets_the_song_in_its_folder(setup):
+def test_songs_go_to_the_singles_folder_lidarr_never_sees(setup):
     lib_db.upsert_many([{"navidrome_id": "nd-bsn", "name": "Being So Normal", "artist": "Peach Pit",
                          "mbz_release_group_id": RG, "folder": "Peach Pit/Being So Normal (2017)", "norm_key": "k"}])
     row = {"album_release_group_id": RG, "track": {"albumArtist": "Peach Pit", "albumTitle": "Being So Normal"}}
-    assert tracks.album_folder(row) == "Peach Pit/Being So Normal (2017)"
+    assert tracks.album_folder(row) == "_singles/Peach Pit/Being So Normal"
 
 
 def test_nobody_has_it_backs_off_and_still_looks(client, setup, monkeypatch):

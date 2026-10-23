@@ -83,7 +83,9 @@ class _LibraryIndex:
 
     def __init__(self, albums: list[dict], user_id: Optional[int] = None):
         from ..library.ownership import Ownership
+        from ..library.singles import Singles
         self.own = Ownership(user_id)
+        self.singles = Singles()
         # Untagged albums matched to a release group by title (db.identity) count as tagged.
         from ..db import identity
         matches = identity.album_matches()
@@ -111,6 +113,23 @@ class _LibraryIndex:
         """The artist|title key under the library's own name for the artist, when it has one."""
         name = self.library_names.get(artist_mbid) if artist_mbid else None
         return album_key(name, title) if name and title is not None else None
+
+    def album_view(self, album_id: Optional[str], availability: dict) -> dict:
+        """[availability] of the library album [album_id]; one made only of single songs (#24)
+        is partial and still requestable."""
+        from ..library.singles import is_singles
+        lib = self.by_id.get(album_id) if album_id else None
+        if lib and is_singles(lib.get("folder")):
+            return self.singles.availability(lib, album_id)
+        return availability
+
+    def song_album(self, lib: Optional[dict], recording_id: Optional[str]) -> Optional[dict]:
+        """The library album a catalogue song is in: none when it's a singles folder that
+        doesn't hold this song (the album's other songs are still requestable)."""
+        from ..library.singles import is_singles
+        if lib and is_singles(lib.get("folder")) and recording_id not in self.singles.recordings:
+            return None
+        return lib
 
     def mine(self, lib: dict) -> Optional[str]:
         """The album id this account opens store album [lib] with; None when it's only on the
@@ -245,6 +264,8 @@ def merge_albums(lib_albums: list[dict], catalog: list[dict], index: _LibraryInd
         r.pop("_key", None)
         r.pop("_release", None)
         out.append(r)
+    for hit in out:
+        hit["availability"] = index.album_view(hit["ids"]["navidromeAlbumId"], hit["availability"])
     return out[:limit]
 
 
@@ -315,7 +336,7 @@ def merge_tracks(lib_songs: list[dict], catalog: list[dict], index: _LibraryInde
         if hit is not None:
             hit["album"]["musicBrainzReleaseGroupId"] = rg
             continue
-        lib = index.by_rg.get(rg)
+        lib = index.song_album(index.by_rg.get(rg), rec)
         mine = index.mine(lib) if lib is not None else None
         if lib is not None and mine is None:
             availability = {**on_server(lib), "via": "album"}

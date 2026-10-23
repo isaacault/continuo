@@ -92,6 +92,9 @@ class Settings:
     # Single-song requests (#24): how often the track loop runs, and how long one Soulseek
     # copy may take before the next one is tried.
     track_poll_seconds: int = 30
+    # Where single songs are filed, relative to MUSIC_DIR: not an artist folder, so Lidarr
+    # never sees a partial album.
+    singles_folder: str = "_singles"
     track_download_give_up_seconds: int = 2700
     libraries_dir: str = ""
     library_sync_seconds: int = 300
@@ -242,6 +245,7 @@ def load(env: dict | None = None) -> Settings:
         library_removal_role=_str(e, "LIBRARY_REMOVAL_ROLE", "admin").lower(),
         name_locale=_str(e, "NAME_LOCALE", "en").lower(),
         track_poll_seconds=_int(e, "TRACK_POLL_SECONDS", 30),
+        singles_folder=_str(e, "SINGLES_FOLDER", "_singles").strip("/") or "_singles",
         track_download_give_up_seconds=_int(e, "TRACK_DOWNLOAD_GIVE_UP_SECONDS", 2700),
         libraries_dir=_url(e, "LIBRARIES_DIR"),
         library_sync_seconds=_int(e, "LIBRARY_SYNC_SECONDS", 300),
