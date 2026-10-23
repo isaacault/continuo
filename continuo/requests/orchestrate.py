@@ -111,6 +111,8 @@ async def process_request(request_id: int) -> None:
     )
     req_db.add_event(request_id, "status", {"from": "pending", "to": "searching"})
     broadcast(row)
+    # Soulseek joins the race at once rather than at Soularr's next cycle.
+    soularr.trigger_soon(f"request {request_id}")
 
 
 def dispatch_process(request_id: int) -> None:

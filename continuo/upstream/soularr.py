@@ -2,6 +2,7 @@
 """Soularr: its config.ini (quality preference), its failed-import denylist (for retrying), and
 "search now" = restart its container (it has no trigger API) via a locked-down nginx proxy that
 allows exactly one Docker operation."""
+import asyncio
 import configparser
 import contextlib
 import json
@@ -114,6 +115,36 @@ async def trigger_run() -> None:
     # Docker: 204 on success, 304 if already restarting.
     if r.status_code not in (204, 304):
         raise RuntimeError(f"Soularr restart failed ({r.status_code}): {r.text[:200]}")
+
+
+_pending: "asyncio.Task | None" = None
+TRIGGER_DELAY_S = 60.0
+BUSY_RECHECK_S = 120.0
+BUSY_MAX_WAITS = 7
+
+
+def trigger_soon(context: str) -> None:
+    """Have Soularr search Soulseek soon after a new request, instead of at its next cycle.
+
+    Soularr is triggered by restarting it, and a restart mid-run abandons the downloads it is
+    waiting on. So: wait TRIGGER_DELAY_S (Lidarr has the album wanted by then, and requests made
+    together share one restart), then hold off while slskd is downloading, re-checking every
+    BUSY_RECHECK_S up to BUSY_MAX_WAITS times, then restart."""
+    global _pending
+    if not enabled() or (_pending is not None and not _pending.done()):
+        return
+    _pending = asyncio.get_running_loop().create_task(_trigger_when_idle(context))
+
+
+async def _trigger_when_idle(context: str) -> None:
+    from . import slskd
+    await asyncio.sleep(TRIGGER_DELAY_S)
+    for _ in range(BUSY_MAX_WAITS):
+        if not await slskd.has_active_downloads():
+            break
+        await asyncio.sleep(BUSY_RECHECK_S)
+    if await try_trigger_run(context):
+        log.info("%s: Soularr searching Soulseek now", context)
 
 
 async def try_trigger_run(context: str) -> bool:
