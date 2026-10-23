@@ -83,6 +83,14 @@ class Settings:
     docker_proxy_url: str = "http://127.0.0.1:2375"
     soularr_enabled: bool = False
 
+    # --- media cache (issue #23): removed albums now, streamed music later ---
+    # The music folder as continuo sees it, mounted read-write. Empty = removal disabled. The cache
+    # is <music_dir>/.continuo-cache: same filesystem and mount, so moves are instant renames.
+    music_dir: str = ""
+    media_cache_max_gb: int = 25
+    removed_min_days: int = 7      # undo window: never evicted sooner
+    removed_max_days: int = 30     # dropped after this whatever the cache size
+
     # --- MusicBrainz ---
     musicbrainz_contact: str = "https://github.com/isaacault/continuo"
     # ListenBrainz user token: only its popularity data (an artist's top songs) needs one; the
@@ -199,6 +207,10 @@ def load(env: dict | None = None) -> Settings:
         ),
         musicbrainz_contact=_str(e, "MUSICBRAINZ_CONTACT", "https://github.com/isaacault/continuo"),
         listenbrainz_token=_str(e, "LISTENBRAINZ_TOKEN"),
+        music_dir=_url(e, "MUSIC_DIR"),  # a path; _url only trims the trailing slash
+        media_cache_max_gb=_int(e, "MEDIA_CACHE_MAX_GB", 25),
+        removed_min_days=_int(e, "REMOVED_MIN_DAYS", 7),
+        removed_max_days=_int(e, "REMOVED_MAX_DAYS", 30),
         ha_webhook_url=_str(e, "HA_WEBHOOK_URL"),
         uptime_kuma_push_url=_str(e, "UPTIME_KUMA_PUSH_URL"),
         status_poll_seconds=_int(e, "STATUS_POLL_SECONDS", 45),

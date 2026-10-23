@@ -113,9 +113,11 @@ affected section is noted.
               restic nightly backup of /ssd/data/media/music
 ```
 
-The backend never touches the music files. Lidarr imports into `/ssd/data/media/music` exactly as
-today, Navidrome's watcher (or a scan the backend triggers) picks the album up, and the backend
-only *observes* both sides and links them.
+The backend never touches the music files on its own. Lidarr imports into `/ssd/data/media/music`
+exactly as today, Navidrome's watcher (or a scan the backend triggers) picks the album up, and the
+backend only *observes* both sides and links them. The one exception is an admin asking to remove
+an album (issue #23, decided 2026-10-23): its folder moves, untouched, into the media cache
+(`<music>/.continuo-cache`), restorable until evicted.
 
 ### 2.2 Planes and responsibilities
 

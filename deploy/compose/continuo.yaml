@@ -1,7 +1,8 @@
 # continuo — the API beneath Polyphony (music-api.ault.me): unified search, album requests with a
 # live pipeline that never gives up, notifications, and the Subsonic façade's auth check.
 # Talks to Lidarr/slskd APIs only; every download still originates from Lidarr/qBittorrent/slskd
-# inside gluetun. Never touches the music files. Secrets in .env, decrypted from
+# inside gluetun. Touches the music files only when an admin removes or restores an album (issue
+# #23): one rename into or out of <music>/.continuo-cache. Secrets in .env, decrypted from
 # secrets/continuo.env (JWT_SECRET, LIDARR_API_KEY, LIDARR_WEBHOOK_SECRET, SLSKD_API_KEY,
 # HA_WEBHOOK_URL, UPTIME_KUMA_PUSH_URL, ADMIN_PASSWORD; NAVIDROME_SERVICE_PASSWORD is only used if
 # NAVIDROME_AUTH is set back to "password").
@@ -38,10 +39,14 @@ services:
       DOCKER_PROXY_URL: http://continuo-docker-proxy:2375
       SOULARR_CONFIG_PATH: /soularr/config.ini
       SOULARR_DENYLIST_PATH: /soularr/failed_imports.json
+      # Media cache (issue #23): the music folder, read-write, at the path Navidrome reports.
+      # Unset = no removal. MEDIA_CACHE_MAX_GB / REMOVED_MIN_DAYS / REMOVED_MAX_DAYS default 25/7/30.
+      MUSIC_DIR: /music
       TRUST_PROXY: "true"                     # behind Caddy → rate-limit on the real client IP
     volumes:
       - /ssd/appdata/continuo:/data           # SQLite (backed up via `continuo backup`, see backup/)
       - /ssd/appdata/soularr:/soularr         # Soularr config.ini (quality toggle) + denylist (Retry)
+      - /ssd/data/media/music:/music          # read-write, for removal into .continuo-cache (#23)
     # No published port: only Caddy (and Lidarr's webhook, via Caddy) talk to it.
     networks:
       default: {}

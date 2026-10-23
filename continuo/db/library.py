@@ -45,6 +45,16 @@ def get(navidrome_id: str) -> dict | None:
         ).fetchone())
 
 
+def delete(navidrome_id: str) -> None:
+    with connect() as c:
+        c.execute("DELETE FROM library_albums WHERE navidrome_id=?", (navidrome_id,))
+
+
+def by_folder(folder: str) -> list[dict]:
+    with connect() as c:
+        return rows(c.execute("SELECT * FROM library_albums WHERE folder=?", (folder,)))
+
+
 def by_release_group(mbid: str) -> list[dict]:
     with connect() as c:
         return rows(c.execute(

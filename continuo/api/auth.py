@@ -81,7 +81,17 @@ async def me(user: CurrentUser = Depends(require_user)) -> dict:
     device = devices_db.get(user.device_id)
     return {"user": {"id": user.id, "username": user.username, "role": user.role},
             "device": _device_out(device, user.device_id),
-            "capabilities": CAPABILITIES}
+            "capabilities": capabilities()}
+
+
+def capabilities() -> list[str]:
+    """What this server offers; library_removal only when the music folder is mounted."""
+    from ..library import cache
+    try:
+        cache.music_dir()
+        return CAPABILITIES + ["library_removal"]
+    except cache.Unavailable:
+        return CAPABILITIES
 
 
 @router.get("/me/library")

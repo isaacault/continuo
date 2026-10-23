@@ -1,4 +1,4 @@
-"""continuo CLI: migrate, create-user, import-lidseeker, backup, policy-check, refresh-library.
+"""continuo CLI: migrate, create-user, set-role, import-lidseeker, backup, policy-check, refresh-library.
 
 Run inside the container: `docker exec -it continuo continuo <command>`."""
 import argparse
@@ -21,6 +21,22 @@ def cmd_migrate(_args) -> int:
     from .db import migrate
     ran = migrate.run()
     print("applied: " + (", ".join(ran) if ran else "nothing (up to date)"))
+    return 0
+
+
+def cmd_set_role(args) -> int:
+    """Make a user an admin (to remove albums, see everyone's requests) or a user again."""
+    from .db import users
+    _migrate()
+    u = users.get(args.username)
+    if u is None:
+        print(f"no user {args.username!r}", file=sys.stderr)
+        return 1
+    if u["role"] == "admin" and args.role != "admin" and users.count_admins() <= 1:
+        print("can't demote the last admin", file=sys.stderr)
+        return 1
+    users.set_role(u["id"], args.role)
+    print(f"{args.username} is now {args.role}")
     return 0
 
 
@@ -201,6 +217,10 @@ def main(argv: list[str] | None = None) -> int:
     cu.add_argument("--role", choices=("admin", "user"), default="user")
     cu.add_argument("--navidrome-username")
     cu.set_defaults(fn=cmd_create_user)
+    sr = sub.add_parser("set-role", help="make a user an admin or a user")
+    sr.add_argument("username")
+    sr.add_argument("role", choices=("admin", "user"))
+    sr.set_defaults(fn=cmd_set_role)
     il = sub.add_parser("import-lidseeker")
     il.add_argument("path")
     il.add_argument("--no-match", action="store_true",
