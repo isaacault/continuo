@@ -2,7 +2,14 @@
 from .conn import connect, now, row, rows
 
 _COLS = ("navidrome_id", "name", "artist", "year", "song_count", "mbz_album_id",
-         "mbz_release_group_id", "folder", "norm_key", "source_updated_at")
+         "mbz_release_group_id", "folder", "norm_key", "source_updated_at", "library_id")
+
+
+def _store() -> str:
+    """Only the store's albums: per-user libraries (#27) hold hardlinked copies of the same
+    albums, which matching must not see as more albums."""
+    from .. import config
+    return f"(library_id IS NULL OR library_id = {int(config.settings.store_library_id)})"
 
 
 def upsert_many(albums: list[dict]) -> None:
@@ -27,7 +34,7 @@ def delete_missing(present_ids: set[str]) -> int:
 
 def all_albums() -> list[dict]:
     with connect() as c:
-        return rows(c.execute("SELECT * FROM library_albums"))
+        return rows(c.execute(f"SELECT * FROM library_albums WHERE {_store()}"))
 
 
 def source_versions() -> dict[str, tuple[str | None, str | None]]:
@@ -52,13 +59,13 @@ def delete(navidrome_id: str) -> None:
 
 def by_folder(folder: str) -> list[dict]:
     with connect() as c:
-        return rows(c.execute("SELECT * FROM library_albums WHERE folder=?", (folder,)))
+        return rows(c.execute(f"SELECT * FROM library_albums WHERE folder=? AND {_store()}", (folder,)))
 
 
 def by_release_group(mbid: str) -> list[dict]:
     with connect() as c:
         return rows(c.execute(
-            "SELECT * FROM library_albums WHERE mbz_release_group_id=?", (mbid,)
+            f"SELECT * FROM library_albums WHERE mbz_release_group_id=? AND {_store()}", (mbid,)
         ))
 
 
@@ -67,11 +74,23 @@ def by_release_ids(release_ids: list[str]) -> list[dict]:
         return []
     with connect() as c:
         return rows(c.execute(
-            f"SELECT * FROM library_albums WHERE mbz_album_id IN ({','.join('?' * len(release_ids))})",
+            f"SELECT * FROM library_albums WHERE mbz_album_id IN ({','.join('?' * len(release_ids))}) AND {_store()}",
             release_ids,
         ))
 
 
 def count() -> int:
     with connect() as c:
-        return c.execute("SELECT COUNT(*) FROM library_albums").fetchone()[0]
+        return c.execute(f"SELECT COUNT(*) FROM library_albums WHERE {_store()}").fetchone()[0]
+
+
+def folders_in_library(library_id: int) -> dict[str, str]:
+    """An account library's albums: store-relative folder -> that library's Navidrome album id."""
+    with connect() as c:
+        return {r[0]: r[1] for r in c.execute(
+            "SELECT folder, navidrome_id FROM library_albums WHERE library_id=? AND folder IS NOT NULL", (library_id,))}
+
+
+def count_in_library(library_id: int) -> int:
+    with connect() as c:
+        return c.execute("SELECT COUNT(*) FROM library_albums WHERE library_id=?", (library_id,)).fetchone()[0]

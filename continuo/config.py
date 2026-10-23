@@ -91,6 +91,9 @@ class Settings:
     # hardlinks into the store (MUSIC_DIR) on the same filesystem and mount. Empty = off.
     libraries_dir: str = ""
     library_sync_seconds: int = 300
+    # The same folder as Navidrome sees it, and the id of Navidrome's library for the store.
+    navidrome_libraries_root: str = "/libraries"
+    store_library_id: int = 1
     # Artists named in a non-Latin script get MusicBrainz's primary alias in this language as
     # their library name (青葉市子 -> Ichiko Aoba); "original" keeps names as they are.
     name_locale: str = "en"
@@ -236,6 +239,8 @@ def load(env: dict | None = None) -> Settings:
         name_locale=_str(e, "NAME_LOCALE", "en").lower(),
         libraries_dir=_url(e, "LIBRARIES_DIR"),
         library_sync_seconds=_int(e, "LIBRARY_SYNC_SECONDS", 300),
+        navidrome_libraries_root=_url(e, "NAVIDROME_LIBRARIES_ROOT", "/libraries"),
+        store_library_id=_int(e, "STORE_LIBRARY_ID", 1),
         lidarr_downloads_path=_url(e, "LIDARR_DOWNLOADS_PATH", "/data/downloads"),
         media_cache_max_gb=_int(e, "MEDIA_CACHE_MAX_GB", 25),
         removed_min_days=_int(e, "REMOVED_MIN_DAYS", 7),

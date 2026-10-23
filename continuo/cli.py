@@ -110,6 +110,47 @@ def cmd_latin_names(args) -> int:
     return 0
 
 
+def cmd_libraries(args) -> int:
+    """Per-user libraries (#27): status, init <user> [--all] [--wait], grant <user>."""
+    import asyncio
+
+    from .db import account_libraries as acc_db
+    from .db import library as lib_db
+    from .db import members as members_db
+    from .db import users
+    from .library import accounts, links
+    _migrate()
+    if args.action == "status":
+        for u in users.list_all():
+            acc = acc_db.get(u["id"])
+            n = len(members_db.folders(u["id"]))
+            seen = lib_db.count_in_library(acc["navidrome_library_id"]) if acc else 0
+            print(f"{u['username']:16} library {acc['navidrome_library_id'] if acc else '-':>3}  "
+                  f"{n} album(s) in continuo, {seen} indexed by Navidrome")
+        return 0
+    user = users.get(args.username or "")
+    if user is None:
+        print(f"no user {args.username!r}", file=sys.stderr)
+        return 1
+    try:
+        if args.action == "init":
+            out = asyncio.run(accounts.init(user, everything=args.all))
+            print(f"{user['username']}: Navidrome library {out['library']}, {out['albums']} album(s) "
+                  f"({out['added']} added), {out['linked']} file(s) linked")
+            if args.wait:
+                have = asyncio.run(accounts.scan_until(out["library"], out["albums"]))
+                print(f"Navidrome indexed {have}/{out['albums']} album(s) in it")
+                if have < out["albums"]:
+                    return 3
+        elif args.action == "grant":
+            asyncio.run(accounts.grant_only_own(user))
+            print(f"{user['username']} now sees only its own library")
+    except links.Unavailable as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_create_user(args) -> int:
     from .auth import passwords
     from .db import users
@@ -299,6 +340,12 @@ def main(argv: list[str] | None = None) -> int:
     ln = sub.add_parser("latin-names", help="preview/apply NAME_LOCALE names for non-Latin artists")
     ln.add_argument("--apply", action="store_true", help="retag (default: preview only)")
     ln.set_defaults(fn=cmd_latin_names)
+    lb = sub.add_parser("libraries", help="per-user libraries: status | init <user> [--all] [--wait] | grant <user>")
+    lb.add_argument("action", choices=("status", "init", "grant"))
+    lb.add_argument("username", nargs="?")
+    lb.add_argument("--all", action="store_true", help="init: the account gets every album in the store")
+    lb.add_argument("--wait", action="store_true", help="init: wait until Navidrome has indexed the library")
+    lb.set_defaults(fn=cmd_libraries)
     il = sub.add_parser("import-lidseeker")
     il.add_argument("path")
     il.add_argument("--no-match", action="store_true",

@@ -160,6 +160,26 @@ async def native_get(path: str, params: Optional[dict] = None) -> tuple[list | d
     raise NavidromeError(None, "unreachable")
 
 
+async def native_send(method: str, path: str, body: dict | list) -> dict | list | None:
+    """POST/PUT /api/<path> as the service user (an admin): library management (#27)."""
+    global _native_token
+    s = config.settings
+    for attempt in (1, 2):
+        if header_mode():
+            headers = {s.navidrome_user_header: s.navidrome_service_user}
+        else:
+            if _native_token is None:
+                _native_token = await _native_login()
+            headers = {"x-nd-authorization": f"Bearer {_native_token}"}
+        r = await _client().request(method, f"/api/{path}", json=body, headers=headers)
+        if r.status_code == 401 and not header_mode() and attempt == 1:
+            _native_token = None
+            continue
+        r.raise_for_status()
+        return r.json() if r.content else None
+    raise NavidromeError(None, "unreachable")
+
+
 async def iter_albums(page_size: int = 500):
     """Every album via the native API, in pages."""
     start = 0
