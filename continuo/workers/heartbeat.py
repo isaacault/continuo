@@ -44,6 +44,8 @@ async def nightly() -> None:
         return
     _last_nightly = today
     await index.refresh()
+    from ..library import cache
+    cache.evict()
     from ..api.admin import policy_check
     report = await policy_check()
     problems = [c for c in report["checks"] if c["status"] == "warn"]

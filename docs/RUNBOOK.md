@@ -218,6 +218,22 @@ docker exec -it continuo continuo create-user charlie --navidrome-username charl
 docker exec continuo continuo backup
 ```
 
+**Removing albums and the media cache** (issue #23, decided 2026-10-23 with the user): an admin
+can remove an album from Polyphony (`POST /v1/library/albums/{navidromeId}/remove`). continuo
+unmonitors it in Lidarr (so it never re-downloads), moves its folder with one rename into
+`<MUSIC_DIR>/.continuo-cache/removed-<ts>-<id>/`, and has Lidarr and Navidrome rescan. Restore
+(`POST /v1/library/removed/{id}/restore`) moves it back to the same path and re-monitors it if it
+was monitored. Needs the music folder mounted read-write at the path Navidrome reports
+(`/ssd/data/media/music:/music`, `MUSIC_DIR=/music`); without it the capability
+`library_removal` is absent and the routes answer 503. The cache is a dot-folder with
+`.ndignore`, so Navidrome skips it and Lidarr skips it as hidden. Eviction is least recently used
+under `MEDIA_CACHE_MAX_GB` (25), never inside `REMOVED_MIN_DAYS` (7, the undo window), and always
+after `REMOVED_MAX_DAYS` (30); it runs nightly and after each removal. The same cache will hold
+streamed and prefetched music ("play now", #12) under one eviction policy. Refused: folders shared
+with another album, an artist root, anything outside `MUSIC_DIR`. Restic's music backup includes
+the cache, so a removed album also survives in older snapshots. Check: `ls -la
+/ssd/data/media/music/.continuo-cache` after a removal; `GET /v1/library/removed`.
+
 **Catalogue artist pages** (decided 2026-10-22, the user's choice): `GET /v1/catalog/artists/{mbid}`
 gives any artist what a library artist page shows — name, picture, biography, top songs, similar
 artists — for Polyphony's catalogue artist page (the discography stays on `/albums`). Sources, each

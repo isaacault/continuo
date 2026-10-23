@@ -287,6 +287,18 @@ async def wait_for_album(artist_id: int, foreign_album_id: str,
     return None
 
 
+async def find_album_by_foreign_id(foreign_album_id: Optional[str]) -> Optional[dict]:
+    """The library album with this release-group MBID, if Lidarr has it."""
+    if not foreign_album_id:
+        return None
+    r = await _client().get("/album", params={"foreignAlbumId": foreign_album_id})
+    r.raise_for_status()
+    for a in r.json():
+        if a.get("foreignAlbumId") == foreign_album_id:
+            return a
+    return None
+
+
 async def set_album_monitored(album_ids: list[int], monitored: bool = True) -> None:
     r = await _client().put("/album/monitor", json={"albumIds": album_ids, "monitored": monitored})
     r.raise_for_status()
