@@ -112,7 +112,7 @@ def cmd_latin_names(args) -> int:
 
 def cmd_libraries(args) -> int:
     """Per-user libraries (#27): status, init <user> [--all] [--wait], carry <user> [--dry-run],
-    grant <user>."""
+    grant <user>, revert <user> (back to the shared store)."""
     import asyncio
 
     from .db import account_libraries as acc_db
@@ -139,9 +139,9 @@ def cmd_libraries(args) -> int:
             print(f"{user['username']}: Navidrome library {out['library']}, {out['albums']} album(s) "
                   f"({out['added']} added), {out['linked']} file(s) linked")
             if args.wait:
-                have = asyncio.run(accounts.scan_until(out["library"], out["albums"]))
-                print(f"Navidrome indexed {have}/{out['albums']} album(s) in it")
-                if have < out["albums"]:
+                have = asyncio.run(accounts.scan_until(out["library"], out["expected"]))
+                print(f"Navidrome indexed {have}/{out['expected']} album(s) in it")
+                if have < out["expected"]:
                     return 3
         elif args.action == "carry":
             from .library import carry
@@ -157,6 +157,9 @@ def cmd_libraries(args) -> int:
         elif args.action == "grant":
             asyncio.run(accounts.grant_only_own(user))
             print(f"{user['username']} now sees only its own library")
+        elif args.action == "revert":
+            asyncio.run(accounts.revert(user))
+            print(f"{user['username']} is back on the shared store library (its folder is kept)")
     except links.Unavailable as e:
         print(str(e), file=sys.stderr)
         return 1
@@ -353,8 +356,8 @@ def main(argv: list[str] | None = None) -> int:
     ln.add_argument("--apply", action="store_true", help="retag (default: preview only)")
     ln.set_defaults(fn=cmd_latin_names)
     lb = sub.add_parser("libraries", help="per-user libraries: status | init <user> [--all] [--wait] | "
-                                          "carry <user> [--dry-run] | grant <user>")
-    lb.add_argument("action", choices=("status", "init", "carry", "grant"))
+                                          "carry <user> [--dry-run] | grant <user> | revert <user>")
+    lb.add_argument("action", choices=("status", "init", "carry", "grant", "revert"))
     lb.add_argument("username", nargs="?")
     lb.add_argument("--all", action="store_true", help="init: the account gets every album in the store")
     lb.add_argument("--wait", action="store_true", help="init: wait until Navidrome has indexed the library")

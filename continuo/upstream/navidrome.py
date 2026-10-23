@@ -12,6 +12,7 @@ Auth (NAVIDROME_AUTH):
 """
 import hashlib
 import logging
+import posixpath
 import secrets
 from typing import Optional
 
@@ -198,6 +199,22 @@ async def iter_albums(page_size: int = 500):
         start += len(data)
         if len(data) < page_size or (total is not None and start >= total):
             return
+
+
+def album_folder(paths: list[str]) -> Optional[str]:
+    """An album's folder from its songs' (relative) paths: their folder, or for a multi-disc
+    album in per-disc subfolders (Album/CD1, Album/CD2) the folder above. Anything wider (songs
+    spread over unrelated folders) keeps the first song's folder, so an album never stands for
+    a whole artist's folder."""
+    dirs = [posixpath.dirname(p) for p in paths if p]
+    if not dirs:
+        return None
+    if len(set(dirs)) == 1:
+        return dirs[0]
+    common = posixpath.commonpath(dirs)
+    if common.count("/") >= 1 and all(d == common or posixpath.dirname(d) == common for d in dirs):
+        return common
+    return dirs[0]
 
 
 async def album_song_paths(album_id: str, limit: int = 1) -> list[str]:

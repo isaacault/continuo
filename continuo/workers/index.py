@@ -6,7 +6,6 @@ ExtAuth yet), fall back to Subsonic getAlbumList2: release MBIDs only, no folder
 falls back to release/fuzzy strategies."""
 import asyncio
 import logging
-import posixpath
 
 import httpx
 
@@ -40,10 +39,10 @@ async def _native() -> list[dict]:
             return prev[1]
         async with sem:
             try:
-                paths = await navidrome.album_song_paths(a["id"])
+                paths = await navidrome.album_song_paths(a["id"], limit=1000)
             except (httpx.HTTPError, NavidromeError, ValueError):
                 return prev[1] if prev else None
-        return posixpath.dirname(relative_path(paths[0])) if paths else None
+        return navidrome.album_folder([relative_path(p) for p in paths])
 
     folders = await asyncio.gather(*(folder_for(a) for a in albums))
     out = []
