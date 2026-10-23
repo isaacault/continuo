@@ -139,13 +139,17 @@ async def _native_login() -> str:
     return token
 
 
-async def native_get(path: str, params: Optional[dict] = None) -> tuple[list | dict, int | None]:
-    """GET /api/<path> as the service user. Returns (json, X-Total-Count)."""
+async def native_get(path: str, params: Optional[dict] = None,
+                     as_user: Optional[str] = None) -> tuple[list | dict, int | None]:
+    """GET /api/<path> as the service user, or (header auth only) as [as_user], whose ratings and
+    stars the answer then carries. Returns (json, X-Total-Count)."""
     global _native_token
     s = config.settings
+    if as_user and not header_mode():
+        raise NavidromeError(None, "acting as another user needs header auth")
     for attempt in (1, 2):
         if header_mode():
-            headers = {s.navidrome_user_header: s.navidrome_service_user}
+            headers = {s.navidrome_user_header: as_user or s.navidrome_service_user}
         else:
             if _native_token is None:
                 _native_token = await _native_login()
