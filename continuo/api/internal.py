@@ -155,6 +155,11 @@ async def _on_import(payload: dict, rows: list[dict]) -> None:
                         "profile's 'Upgrades Allowed'.", tag="continuo-upgrade", kind="policy")
         return
     await _file_under_library_name(payload.get("artist") or {}, paths)
+    from ..requests import race
+    try:
+        await race.on_imported(rows, payload)
+    except Exception:  # noqa: BLE001 — never fail the webhook over a race
+        log.exception("import: settling the race failed")
     for row in rows:
         merged = sorted(set(row.get("import_paths") or []) | set(paths))
         req_db.update(row["id"], import_paths=merged, imported_at=now(),

@@ -121,6 +121,17 @@ class Settings:
     search_cycle_seconds: int = 300
     still_looking_after_cycles: int = 6
     stalled_download_hours: int = 6
+    # Racing slow downloads (#31): after RACE_GRACE_MIN minutes downloading, a download that
+    # won't finish within RACE_SLOW_MIN minutes at its speed so far, or got nothing for
+    # RACE_IDLE_MIN minutes, gets Soulseek racing it; the first imported wins.
+    race_enabled: bool = True
+    race_grace_min: int = 10
+    race_slow_min: int = 60
+    race_idle_min: int = 10
+    # slskd's downloads folder as continuo sees it (to clear a losing racer's files; "" = leave
+    # them) and as Lidarr sees it (where Lidarr imports a winning racer from).
+    slskd_downloads_dir: str = ""
+    lidarr_soulseek_path: str = "/data/downloads/soulseek"
     heartbeat_seconds: int = 60
     loop_stale_seconds: int = 300
     library_index_hour: int = 4
@@ -233,6 +244,12 @@ def load(env: dict | None = None) -> Settings:
         search_cycle_seconds=_int(e, "SEARCH_CYCLE_SECONDS", 300),
         still_looking_after_cycles=_int(e, "STILL_LOOKING_AFTER_CYCLES", 6),
         stalled_download_hours=_int(e, "STALLED_DOWNLOAD_HOURS", 6),
+        race_enabled=_bool(e, "RACE_ENABLED", True),
+        race_grace_min=_int(e, "RACE_GRACE_MIN", 10),
+        race_slow_min=_int(e, "RACE_SLOW_MIN", 60),
+        race_idle_min=_int(e, "RACE_IDLE_MIN", 10),
+        slskd_downloads_dir=_url(e, "SLSKD_DOWNLOADS_DIR"),
+        lidarr_soulseek_path=_url(e, "LIDARR_SOULSEEK_PATH", "/data/downloads/soulseek"),
         heartbeat_seconds=_int(e, "HEARTBEAT_SECONDS", 60),
         loop_stale_seconds=_int(e, "LOOP_STALE_SECONDS", 300),
         library_index_hour=_int(e, "LIBRARY_INDEX_HOUR", 4),

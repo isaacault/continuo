@@ -10,7 +10,7 @@ import logging
 from .. import config
 from ..db import requests as req_db
 from ..db.conn import now, seconds_since
-from ..requests import orchestrate, pipeline
+from ..requests import orchestrate, pipeline, race
 from ..upstream import lidarr
 from . import scan
 
@@ -104,3 +104,8 @@ async def tick() -> None:
             await update_one(row, queue_index)
         except Exception:  # noqa: BLE001 — one bad row must not starve the rest
             log.exception("status update failed for request %s", row["id"])
+    try:
+        await race.tick([r for r in rows if r["status"] == "downloading" or r.get("lidarr_album_id") in queue_index],
+                        queue_index)
+    except Exception:  # noqa: BLE001
+        log.exception("race tick failed")
