@@ -146,3 +146,21 @@ async def album_tracks(release_group_mbid: str, release_mbid: Optional[str] = No
         del _tracklist_cache[next(iter(_tracklist_cache))]
     _tracklist_cache[cache_key] = out
     return out
+
+
+async def release_group_for_title(artist_mbid: str, title: str) -> Optional[str]:
+    """The release group of this artist's release called [title], via MusicBrainz's release
+    search, which also knows translated and romanised release titles ("Windswept Adan" is a
+    release of アダンの風). None when nothing scores high enough."""
+    q = title.replace("\\", " ").replace('"', " ").strip()
+    if not q:
+        return None
+    try:
+        data = await _get("/release", {"query": f'release:"{q}" AND arid:{artist_mbid}', "limit": 5})
+    except (httpx.HTTPError, ValueError):
+        return None
+    for rel in data.get("releases") or []:
+        rg = (rel.get("release-group") or {}).get("id")
+        if rg and int(rel.get("score") or 0) >= 90:
+            return rg
+    return None

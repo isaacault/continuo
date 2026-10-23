@@ -73,6 +73,13 @@ class _LibraryIndex:
     """Lookups over library_albums (the whole library, not just this query's search3 page)."""
 
     def __init__(self, albums: list[dict]):
+        # Untagged albums matched to a release group by title (db.identity) count as tagged.
+        from ..db import identity
+        matches = identity.album_matches()
+        # mb artist id -> the library's name for that artist, where it differs (Ichiko Aoba).
+        self.library_names = identity.library_names()
+        albums = [a if a.get("mbz_release_group_id") or not (m := matches.get(a["navidrome_id"])) or not m["mb_release_group_id"]
+                  else {**a, "mbz_release_group_id": m["mb_release_group_id"]} for a in albums]
         self.by_id = {a["navidrome_id"]: a for a in albums}
         self.by_rg, self.by_release, self.by_key = {}, {}, {}
         for a in albums:
@@ -83,16 +90,22 @@ class _LibraryIndex:
             if a.get("norm_key"):
                 self.by_key.setdefault(a["norm_key"], []).append(a)
 
+    def alias_key(self, artist_mbid: Optional[str], title: Optional[str]) -> Optional[str]:
+        """The artist|title key under the library's own name for the artist, when it has one."""
+        name = self.library_names.get(artist_mbid) if artist_mbid else None
+        return album_key(name, title) if name and title is not None else None
+
     def find(self, rg: Optional[str], release_ids: list[str], key: str,
-             title: Optional[str] = None) -> Optional[dict]:
+             title: Optional[str] = None, artist_mbid: Optional[str] = None) -> Optional[dict]:
         if rg and rg in self.by_rg:
             return self.by_rg[rg]
         for rid in release_ids:
             if rid in self.by_release:
                 return self.by_release[rid]
-        for a in self.by_key.get(key, ()):
-            if same_by_name(a.get("mbz_release_group_id"), a.get("name"), rg, title):
-                return a
+        for k in (key, self.alias_key(artist_mbid, title)):
+            for a in self.by_key.get(k, ()) if k else ():
+                if same_by_name(a.get("mbz_release_group_id"), a.get("name"), rg, title):
+                    return a
         return None
 
 
@@ -123,6 +136,7 @@ def merge_albums(lib_albums: list[dict], catalog: list[dict], index: _LibraryInd
     for c in catalog:
         rg = c.get("musicBrainzReleaseGroupId")
         key = album_key(c.get("artist"), c.get("title"))
+        keys = {key, index.alias_key(c.get("musicBrainzArtistId"), c.get("title"))} - {None}
         # Fold into a library hit of this query…
         target = None
         for hit in results:
@@ -130,13 +144,13 @@ def merge_albums(lib_albums: list[dict], catalog: list[dict], index: _LibraryInd
                 continue
             if (rg and hit["ids"]["musicBrainzReleaseGroupId"] == rg) \
                     or (hit["_release"] and hit["_release"] in c.get("releaseIds", [])) \
-                    or (hit["_key"] == key and same_by_name(hit["ids"]["musicBrainzReleaseGroupId"],
-                                                           hit.get("title"), rg, c.get("title"))):
+                    or (hit["_key"] in keys and same_by_name(hit["ids"]["musicBrainzReleaseGroupId"],
+                                                            hit.get("title"), rg, c.get("title"))):
                 target = hit
                 break
         # …or into a library album the search page didn't return.
         if target is None:
-            lib = index.find(rg, c.get("releaseIds", []), key, c.get("title"))
+            lib = index.find(rg, c.get("releaseIds", []), key, c.get("title"), c.get("musicBrainzArtistId"))
             if lib is not None:
                 target = by_nd.get(lib["navidrome_id"])
                 if target is None:
@@ -211,10 +225,15 @@ def merge_artists(lib_artists: list[dict], catalog: list[dict], limit: int) -> l
         if mbid:
             by_mbid[mbid] = hit
         by_name.setdefault(normalise(a.get("name")), hit)
+    # The library's own name for an artist MusicBrainz names differently (Ichiko Aoba / 青葉市子).
+    from ..db import identity
+    library_names = identity.library_names() if catalog else {}
     for c in catalog:
         mbid = c.get("musicBrainzArtistId")
         hit = by_mbid.get(mbid) if mbid else None
         hit = hit or by_name.get(normalise(c.get("name")))
+        if hit is None and mbid in library_names:
+            hit = by_name.get(normalise(library_names[mbid]))
         if hit is not None:
             hit["ids"]["musicBrainzArtistId"] = hit["ids"]["musicBrainzArtistId"] or mbid
             if hit["key"].startswith("nd:") and mbid:

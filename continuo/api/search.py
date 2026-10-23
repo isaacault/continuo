@@ -5,12 +5,13 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from .. import artwork
 from ..auth.deps import CurrentUser, require_user
+from ..db import identity
 from ..db import library as lib_db
 from ..db import requests as req_db
 from ..errors import ApiError
 from ..ratelimit import catalog_limiter, search_limiter
 from ..requests.normalise import album_key
-from ..search import artist_info, merge
+from ..search import album_match, artist_info, merge, resolve
 from ..upstream import lidarr, musicbrainz
 
 router = APIRouter(prefix="/v1", tags=["search"])
@@ -39,7 +40,7 @@ async def search(request: Request, q: str = Query(..., min_length=1, max_length=
 def _album_availability(album: dict, index: merge._LibraryIndex, requests: dict) -> dict:
     rg = album.get("musicBrainzReleaseGroupId")
     lib = index.find(rg, album.get("releaseIds", []), album_key(album.get("artist"), album.get("title")),
-                     album.get("title"))
+                     album.get("title"), album.get("musicBrainzArtistId"))
     if lib is not None:
         return {"state": "in_library", "navidromeAlbumId": lib["navidrome_id"],
                 "trackCount": lib.get("song_count")}
@@ -68,10 +69,26 @@ def _album_out(album: dict, availability: dict) -> dict:
 async def artist_albums(request: Request, mbid: str,
                         _user: CurrentUser = Depends(require_user)) -> list[dict]:
     catalog_limiter.check(request)
-    albums = await lidarr.artist_albums(_check_mbid(mbid))
+    mbid = _check_mbid(mbid)
+    albums = await lidarr.artist_albums(mbid)
+    # Untagged library albums by this artist, under either name, matched by release title first.
+    names = {albums[0].get("artist") if albums else None, identity.library_name(mbid)}
+    await album_match.match_artist(mbid, {n for n in names if n}, albums)
     index = merge._LibraryIndex(lib_db.all_albums())
     requests = req_db.active_by_release_group()
     return [_album_out(a, _album_availability(a, index, requests)) for a in albums]
+
+
+@router.get("/catalog/artists/resolve")
+async def resolve_artist(request: Request, name: str = Query(..., min_length=1, max_length=200),
+                         _user: CurrentUser = Depends(require_user)) -> dict:
+    """The catalogue artist a library artist without a MusicBrainz id is: same name, and
+    among same-name artists the one in Lidarr or sharing the most albums with the library."""
+    catalog_limiter.check(request)
+    found = await resolve.resolve(name.strip())
+    if found is None:
+        raise ApiError(404, "not_found", "No artist of that name in the catalogue.")
+    return found
 
 
 @router.get("/catalog/artists/{mbid}")
