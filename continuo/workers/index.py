@@ -56,6 +56,7 @@ async def _native() -> list[dict]:
             "mbz_release_group_id": a.get("mbzReleaseGroupId") or None, "folder": folder or None,
             "norm_key": album_key(artist, a.get("name")),
             "source_updated_at": a.get("updatedAt"),
+            "library_id": a.get("libraryId"),
         })
     return out
 
