@@ -257,7 +257,7 @@ async def _match_available() -> int:
     try:
         await index.refresh()
         library = lib_db.all_albums()
-        for row in req_db.list_requests(statuses=("available",)):
+        for row in req_db.list_requests(statuses=("available",), kind="album"):
             if row.get("navidrome_album_id"):
                 continue
             album = None

@@ -174,9 +174,13 @@ def candidates(responses: list[dict]) -> list[Candidate]:
 
 
 def best(responses: list[dict], artist: str, title: str, duration_ms: Optional[int] = None,
-         policy: str = LIBRARY, allowed: Optional[list[tuple[str, int]]] = None) -> Optional[Candidate]:
+         policy: str = LIBRARY, allowed: Optional[list[tuple[str, int]]] = None,
+         variants: bool = True) -> Optional[Candidate]:
+    """The best copy of a song; [variants]=False refuses live, remix, cover… copies outright
+    (unless the title itself says so) instead of only ranking them last."""
     allowed = allowed if allowed is not None else formats(policy)
-    scored = [(k, c) for c in candidates(responses) if (k := score(c, artist, title, duration_ms, policy, allowed))]
+    scored = [(k, c) for c in candidates(responses) if (k := score(c, artist, title, duration_ms, policy, allowed))
+              and (variants or not k[0])]
     return min(scored, key=lambda p: p[0])[1] if scored else None
 
 

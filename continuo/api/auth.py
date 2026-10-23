@@ -95,7 +95,11 @@ def capabilities(user: CurrentUser) -> list[str]:
     except cache.Unavailable:
         return CAPABILITIES
     out = CAPABILITIES + ["library_removal"] if may_remove(user) else list(CAPABILITIES)
-    return out + ["own_library"] if ownership.has_own_library(user.id) else out
+    if ownership.has_own_library(user.id):
+        out = out + ["own_library"]
+    # Single songs (#24) come from Soulseek straight into the music folder.
+    from ..upstream import slskd
+    return out + ["track_requests"] if slskd.enabled() else out
 
 
 @router.get("/me/library")

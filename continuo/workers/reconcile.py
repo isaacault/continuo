@@ -13,7 +13,7 @@ _RECONCILED = ("pending", "searching", "downloading", "importing")
 
 
 async def tick() -> None:
-    for row in req_db.list_requests(statuses=_RECONCILED):
+    for row in req_db.list_requests(statuses=_RECONCILED, kind="album"):
         if not (row.get("lidarr_album_id") and row.get("lidarr_artist_id")):
             continue
         try:

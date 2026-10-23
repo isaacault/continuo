@@ -166,6 +166,41 @@ async def release_group_for_title(artist_mbid: str, title: str) -> Optional[str]
     return None
 
 
+def _credit(credits: list[dict]) -> tuple[Optional[str], Optional[str]]:
+    """(the credited name as printed, the first artist's MBID)."""
+    name = "".join((c.get("name") or (c.get("artist") or {}).get("name") or "") + (c.get("joinphrase") or "")
+                   for c in credits or []).strip()
+    first = (credits or [{}])[0].get("artist") or {}
+    return name or None, first.get("id")
+
+
+async def recording(recording_mbid: str) -> Optional[dict]:
+    """{title, artist, artistId, durationMs} for a recording; None when MusicBrainz doesn't
+    know it (or didn't answer)."""
+    try:
+        r = await _get(f"/recording/{recording_mbid}", {"inc": "artist-credits"})
+    except (httpx.HTTPError, ValueError):
+        return None
+    artist, artist_id = _credit(r.get("artist-credit"))
+    return {"title": r.get("title"), "artist": artist, "artistId": artist_id,
+            "durationMs": int(r["length"]) if r.get("length") else None}
+
+
+async def album_info(release_group_mbid: str) -> Optional[dict]:
+    """What filing a song into this album needs: {title, artist, artistId, date, year,
+    releaseId, imageUrl, tracks} (tracks as album_tracks, from the same release)."""
+    try:
+        rg = await _get(f"/release-group/{release_group_mbid}", {"inc": "releases+artist-credits"})
+    except (httpx.HTTPError, ValueError):
+        return None
+    release_id = _pick_release(rg.get("releases", []))
+    artist, artist_id = _credit(rg.get("artist-credit"))
+    date = rg.get("first-release-date") or None
+    return {"title": rg.get("title"), "artist": artist, "artistId": artist_id, "date": date,
+            "year": _year(date), "releaseId": release_id, "imageUrl": coverart_url(release_group_mbid),
+            "tracks": await album_tracks(release_group_mbid, release_id) if release_id else []}
+
+
 _artist_cache: dict[str, tuple[float, Optional[dict]]] = {}
 _ARTIST_TTL = 24 * 3600.0
 

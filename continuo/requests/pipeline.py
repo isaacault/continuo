@@ -96,6 +96,9 @@ def _searching_detail(row: dict) -> str:
 
 
 async def compute(row: dict, queue_index: Optional[dict[int, dict]] = None) -> dict:
+    if row.get("kind") == "track":
+        from . import tracks
+        return tracks.pipeline(row)
     status = row.get("status")
     if status == "error":
         return build("requested", detail=row.get("error") or "Couldn't add this to Lidarr.",

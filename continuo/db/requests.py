@@ -11,8 +11,9 @@ _UPDATABLE = {
     "last_cycle_at", "last_search_at", "last_source", "import_paths", "imported_at",
     "scan_started_at", "attention", "error", "user_id", "available_at", "notified_at",
     "download_started_at", "first_file_at", "first_source",
+    "album_release_group_id", "track", "fetch", "next_attempt_at", "file_path",
 }
-_JSON = {"import_paths", "attention"}
+_JSON = {"import_paths", "attention", "track", "fetch"}
 
 
 def _decode(r: dict | None) -> dict | None:
@@ -20,6 +21,8 @@ def _decode(r: dict | None) -> dict | None:
         return None
     r["import_paths"] = loads(r.get("import_paths"), [])
     r["attention"] = loads(r.get("attention"))
+    r["track"] = loads(r.get("track"))
+    r["fetch"] = loads(r.get("fetch"))
     r["still_looking"] = bool(r.get("still_looking"))
     return r
 
@@ -44,6 +47,7 @@ def create(*, mb_release_group_id: str, title: str | None, artist: str | None,
                 error=NULL, attention=NULL, still_looking=0, search_cycles=0,
                 last_cycle_at=NULL, navidrome_album_id=NULL, available_at=NULL,
                 notified_at=NULL, imported_at=NULL, scan_started_at=NULL, import_paths=NULL,
+                fetch=NULL, next_attempt_at=NULL, file_path=NULL,
                 updated_at=excluded.updated_at
             """,
             (kind, mb_release_group_id, title, artist, year, artwork_url, note, status,
@@ -76,8 +80,12 @@ def by_lidarr_album(lidarr_album_id: int) -> dict | None:
 
 
 def list_requests(*, user_id: int | None = None, statuses: tuple[str, ...] | None = None,
-                  limit: int | None = None, before_id: int | None = None) -> list[dict]:
+                  limit: int | None = None, before_id: int | None = None,
+                  kind: str | None = None) -> list[dict]:
     q, args = "SELECT * FROM requests WHERE 1=1", []
+    if kind is not None:
+        q += " AND kind=?"
+        args.append(kind)
     if user_id is not None:
         q += " AND user_id=?"
         args.append(user_id)
@@ -96,19 +104,25 @@ def list_requests(*, user_id: int | None = None, statuses: tuple[str, ...] | Non
 
 
 def active() -> list[dict]:
-    return list_requests(statuses=ACTIVE)
+    """Live album requests (the Lidarr side; track requests have their own loop)."""
+    return list_requests(statuses=ACTIVE, kind="album")
 
 
 def active_by_release_group() -> dict[str, dict]:
-    """Live requests keyed by release-group MBID — for search availability and the request lock."""
-    return {r["mb_release_group_id"]: r for r in list_requests(statuses=ACTIVE)}
+    """Live album requests keyed by release-group MBID — for search availability and the request lock."""
+    return {r["mb_release_group_id"]: r for r in list_requests(statuses=ACTIVE, kind="album")}
+
+
+def active_tracks() -> dict[str, dict]:
+    """Live track requests keyed by recording MBID."""
+    return {r["mb_release_group_id"]: r for r in list_requests(statuses=ACTIVE, kind="track")}
 
 
 def pending_unprocessed() -> list[dict]:
     """Rows still 'pending' with nothing in Lidarr: their add task died with a restart."""
     with connect() as c:
         return [_decode(r) for r in rows(c.execute(
-            "SELECT * FROM requests WHERE status='pending' AND lidarr_album_id IS NULL"
+            "SELECT * FROM requests WHERE status='pending' AND lidarr_album_id IS NULL AND kind='album'"
         ))]
 
 

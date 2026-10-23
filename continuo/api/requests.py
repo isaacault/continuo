@@ -56,8 +56,39 @@ async def _already_on_server(user: CurrentUser, store_album: dict) -> None:
     raise ApiError(409, "in_library", "That album is already in the library.", navidromeAlbumId=mine)
 
 
+async def _create_track(body: RequestIn, user: CurrentUser) -> dict:
+    """Just the song (#24): from Soulseek, into its album's folder; Lidarr isn't involved."""
+    from ..requests import tracks
+    if not body.musicBrainzRecordingId:
+        raise ApiError(422, "missing_recording", "A song request needs musicBrainzRecordingId.")
+    rec, rg = body.musicBrainzRecordingId.lower(), body.musicBrainzReleaseGroupId.lower()
+    existing = req_db.by_release_group(rec, kind="track")
+    if existing and existing["status"] in req_db.ACTIVE:
+        raise ApiError(409, "already_requested", "That song is already requested.", requestId=existing["id"])
+    album = req_db.by_release_group(rg)
+    if album and album["status"] in req_db.ACTIVE:
+        raise ApiError(409, "already_requested", "Its whole album is already requested.", requestId=album["id"])
+    in_lib = lib_db.by_release_group(rg)
+    if in_lib:
+        await _already_on_server(user, in_lib[0])
+    try:
+        t = await tracks.prepare(rec, rg)
+    except LookupError as e:
+        raise ApiError(404, "not_found", str(e)) from e
+    except httpx.HTTPError as e:
+        raise UpstreamError("musicbrainz") from e
+    row = req_db.create(mb_release_group_id=rec, title=t["title"], artist=t["artist"], year=t.get("year"),
+                        artwork_url=t.get("imageUrl"), user_id=user.id, note=body.note, kind="track")
+    row = req_db.update(row["id"], album_release_group_id=rg, track=t)
+    req_db.add_event(row["id"], "requested", {"by": user.username, "kind": "track", "album": t["albumTitle"]})
+    log.info("request %s: song %s — %s (%s) by %s", row["id"], t["title"], t["artist"], t["albumTitle"], user.username)
+    return view.to_out(row, tracks.pipeline(row), user.username)
+
+
 @router.post("", status_code=201)
 async def create_request(body: RequestIn, user: CurrentUser = Depends(require_user)) -> dict:
+    if body.kind == "track":
+        return await _create_track(body, user)
     rg = body.musicBrainzReleaseGroupId.lower()
     existing = req_db.by_release_group(rg)
     if existing and existing["status"] in req_db.ACTIVE:
@@ -141,6 +172,9 @@ async def delete_request(rid: int, user: CurrentUser = Depends(require_user)) ->
         except httpx.HTTPError as e:
             log.warning("delete %s: couldn't unmonitor album: %s", rid, e)
             warn = " (couldn't reach Lidarr to unmonitor it — it may still be wanted)"
+    if row["kind"] == "track" and row["status"] == "downloading":
+        from ..requests import tracks
+        await tracks.cancel(row)
     req_db.delete(rid)
     return {"ok": True, "message": "Request removed." + warn}
 
@@ -150,6 +184,9 @@ async def retry(rid: int, user: CurrentUser = Depends(require_user)) -> dict:
     row = _get_visible(rid, user)
     if row["status"] == "available":
         raise ApiError(409, "already_available", "That album is already available.")
+    if row["kind"] == "track":
+        from ..requests import tracks
+        return {"ok": True, "message": tracks.search_now(row)}
     try:
         message = await orchestrate.retry(row)
     except httpx.HTTPError as e:
@@ -162,6 +199,9 @@ async def search_now(rid: int, user: CurrentUser = Depends(require_user)) -> dic
     row = _get_visible(rid, user)
     if row["status"] == "available":
         raise ApiError(409, "already_available", "That album is already available.")
+    if row["kind"] == "track":
+        from ..requests import tracks
+        return {"ok": True, "message": tracks.search_now(row)}
     if row["status"] == "error":
         raise ApiError(409, "use_retry", "Use retry for a request that couldn't be added.")
     try:

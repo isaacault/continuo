@@ -42,7 +42,8 @@ async def _upstream(mbid: str) -> dict:
 
 
 def _top_track(t: dict, albums_by_title: dict[str, dict], index: _LibraryIndex,
-               requests: dict[str, dict], artist_mbid: Optional[str] = None) -> dict:
+               requests: dict[str, dict], artist_mbid: Optional[str] = None,
+               track_requests: Optional[dict[str, dict]] = None) -> dict:
     """One top song with its album: matched to the artist's release groups by title, and to the
     library by release, release group or name."""
     album = albums_by_title.get(normalise(t.get("releaseName")))
@@ -56,6 +57,8 @@ def _top_track(t: dict, albums_by_title: dict[str, dict], index: _LibraryIndex,
         availability = {"state": "album_in_library", "navidromeAlbumId": mine}
     elif rg and rg in requests:
         availability = _request_availability(requests[rg])
+    elif t.get("recordingMbid") and t["recordingMbid"] in (track_requests or {}):
+        availability = _request_availability(track_requests[t["recordingMbid"]])
     elif rg:
         availability = {"state": "requestable", "via": "album"}
     else:
@@ -95,7 +98,8 @@ async def build(mbid: str, user_id: Optional[int] = None) -> Optional[dict]:
             albums = []  # songs without a release group can't be requested, but still show
         for a in albums:
             albums_by_title.setdefault(normalise(a.get("title")), a)
-        top_tracks = [_top_track(t, albums_by_title, index, requests, mbid) for t in up["top"]]
+        track_requests = req_db.active_tracks()
+        top_tracks = [_top_track(t, albums_by_title, index, requests, mbid, track_requests) for t in up["top"]]
 
     similar = None
     if up["similar"] is not None:
