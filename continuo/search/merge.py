@@ -6,6 +6,7 @@ win; a catalogue hit that resolves to a library album folds into it.
 """
 import asyncio
 import logging
+import unicodedata
 from typing import Optional
 
 import httpx
@@ -48,6 +49,26 @@ def _request_availability(req: dict) -> dict:
     return out
 
 
+# Characters normalise() drops that still make two titles different albums ("0" vs "0%"). Symbols
+# (Unicode S*) count too, except "+", which normalise() reads as "and".
+_MARKS = set("%#$@*=~^°±§")
+
+
+def _marks(title: Optional[str]) -> str:
+    return "".join(sorted(ch for ch in (title or "")
+                          if ch != "+" and (ch in _MARKS or unicodedata.category(ch).startswith("S"))))
+
+
+def same_by_name(lib_rg: Optional[str], lib_title: Optional[str], rg: Optional[str],
+                 title: Optional[str]) -> bool:
+    """Whether a library album that shares a catalogue release's normalised artist|title key is
+    that release. Not when both have release groups and they differ (a "Magpie" single is not the
+    "Magpie" album), nor when the titles differ by a mark normalise() drops ("0" is not "0%")."""
+    if rg and lib_rg and rg != lib_rg:
+        return False
+    return title is None or _marks(title) == _marks(lib_title)
+
+
 class _LibraryIndex:
     """Lookups over library_albums (the whole library, not just this query's search3 page)."""
 
@@ -60,15 +81,19 @@ class _LibraryIndex:
             if a.get("mbz_album_id"):
                 self.by_release.setdefault(a["mbz_album_id"], a)
             if a.get("norm_key"):
-                self.by_key.setdefault(a["norm_key"], a)
+                self.by_key.setdefault(a["norm_key"], []).append(a)
 
-    def find(self, rg: Optional[str], release_ids: list[str], key: str) -> Optional[dict]:
+    def find(self, rg: Optional[str], release_ids: list[str], key: str,
+             title: Optional[str] = None) -> Optional[dict]:
         if rg and rg in self.by_rg:
             return self.by_rg[rg]
         for rid in release_ids:
             if rid in self.by_release:
                 return self.by_release[rid]
-        return self.by_key.get(key)
+        for a in self.by_key.get(key, ()):
+            if same_by_name(a.get("mbz_release_group_id"), a.get("name"), rg, title):
+                return a
+        return None
 
 
 def merge_albums(lib_albums: list[dict], catalog: list[dict], index: _LibraryIndex,
@@ -105,12 +130,13 @@ def merge_albums(lib_albums: list[dict], catalog: list[dict], index: _LibraryInd
                 continue
             if (rg and hit["ids"]["musicBrainzReleaseGroupId"] == rg) \
                     or (hit["_release"] and hit["_release"] in c.get("releaseIds", [])) \
-                    or hit["_key"] == key:
+                    or (hit["_key"] == key and same_by_name(hit["ids"]["musicBrainzReleaseGroupId"],
+                                                           hit.get("title"), rg, c.get("title"))):
                 target = hit
                 break
         # …or into a library album the search page didn't return.
         if target is None:
-            lib = index.find(rg, c.get("releaseIds", []), key)
+            lib = index.find(rg, c.get("releaseIds", []), key, c.get("title"))
             if lib is not None:
                 target = by_nd.get(lib["navidrome_id"])
                 if target is None:

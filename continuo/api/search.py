@@ -38,7 +38,8 @@ async def search(request: Request, q: str = Query(..., min_length=1, max_length=
 
 def _album_availability(album: dict, index: merge._LibraryIndex, requests: dict) -> dict:
     rg = album.get("musicBrainzReleaseGroupId")
-    lib = index.find(rg, album.get("releaseIds", []), album_key(album.get("artist"), album.get("title")))
+    lib = index.find(rg, album.get("releaseIds", []), album_key(album.get("artist"), album.get("title")),
+                     album.get("title"))
     if lib is not None:
         return {"state": "in_library", "navidromeAlbumId": lib["navidrome_id"],
                 "trackCount": lib.get("song_count")}

@@ -47,7 +47,8 @@ def _top_track(t: dict, albums_by_title: dict[str, dict], index: _LibraryIndex,
     library by release, release group or name."""
     album = albums_by_title.get(normalise(t.get("releaseName")))
     rg = (album or {}).get("musicBrainzReleaseGroupId")
-    lib = index.find(rg, [t["releaseMbid"]] if t.get("releaseMbid") else [], album_key(t.get("artist"), t.get("releaseName")))
+    lib = index.find(rg, [t["releaseMbid"]] if t.get("releaseMbid") else [],
+                     album_key(t.get("artist"), t.get("releaseName")), t.get("releaseName"))
     if lib is not None:
         availability = {"state": "album_in_library", "navidromeAlbumId": lib["navidrome_id"]}
     elif rg and rg in requests:
