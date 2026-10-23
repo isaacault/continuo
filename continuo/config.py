@@ -89,6 +89,10 @@ class Settings:
     music_dir: str = ""
     # Per-user libraries (#27): each account's library is <libraries_dir>/<Navidrome username>/,
     # hardlinks into the store (MUSIC_DIR) on the same filesystem and mount. Empty = off.
+    # Single-song requests (#24): how often the track loop runs, and how long one Soulseek
+    # copy may take before the next one is tried.
+    track_poll_seconds: int = 30
+    track_download_give_up_seconds: int = 2700
     libraries_dir: str = ""
     library_sync_seconds: int = 300
     # The same folder as Navidrome sees it, and the id of Navidrome's library for the store.
@@ -237,6 +241,8 @@ def load(env: dict | None = None) -> Settings:
         music_dir=_url(e, "MUSIC_DIR"),  # a path; _url only trims the trailing slash
         library_removal_role=_str(e, "LIBRARY_REMOVAL_ROLE", "admin").lower(),
         name_locale=_str(e, "NAME_LOCALE", "en").lower(),
+        track_poll_seconds=_int(e, "TRACK_POLL_SECONDS", 30),
+        track_download_give_up_seconds=_int(e, "TRACK_DOWNLOAD_GIVE_UP_SECONDS", 2700),
         libraries_dir=_url(e, "LIBRARIES_DIR"),
         library_sync_seconds=_int(e, "LIBRARY_SYNC_SECONDS", 300),
         navidrome_libraries_root=_url(e, "NAVIDROME_LIBRARIES_ROOT", "/libraries"),

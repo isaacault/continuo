@@ -61,3 +61,34 @@ def audio_files(folder: str) -> list[str]:
     for root, _dirs, files in os.walk(folder):
         out += [os.path.join(root, f) for f in files if f.lower().endswith(AUDIO)]
     return sorted(out)
+
+
+# Easy tag names mutagen maps per format (ID3, Vorbis comments, MP4 atoms).
+_TRACK_FIELDS = ("title", "artist", "album", "albumartist", "albumartistsort", "artistsort",
+                 "tracknumber", "discnumber", "date", "musicbrainz_trackid", "musicbrainz_albumid",
+                 "musicbrainz_releasegroupid", "musicbrainz_artistid", "musicbrainz_albumartistid")
+
+
+def write_track_tags(path: str, fields: dict[str, str | None]) -> bool:
+    """Tag a single downloaded song from MusicBrainz (#24): fields given replace what the
+    uploader had (empty ones are left alone). False when the file can't be tagged."""
+    import mutagen
+    try:
+        f = mutagen.File(path, easy=True)
+    except Exception as e:  # noqa: BLE001 — a damaged file is reported, not raised
+        log.warning("tags: can't read %s: %s", path, e)
+        return False
+    if f is None:
+        return False
+    if f.tags is None:
+        f.add_tags()
+    for key in _TRACK_FIELDS:
+        value = fields.get(key)
+        if not value:
+            continue
+        try:
+            f.tags[key] = [str(value)]
+        except (KeyError, ValueError):  # a format without that easy name
+            pass
+    f.save()
+    return True

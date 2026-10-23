@@ -3,6 +3,7 @@ import asyncio
 
 from .. import config
 from ..library import links
+from ..requests import tracks
 from . import heartbeat, reconcile, registry, scan, status
 
 
@@ -15,6 +16,7 @@ def start() -> list[asyncio.Task]:
         "heartbeat": (lambda: config.settings.heartbeat_seconds, heartbeat.beat),
         "nightly": (lambda: 600, heartbeat.nightly),
         "libraries": (lambda: config.settings.library_sync_seconds, links.tick),
+        "tracks": (lambda: config.settings.track_poll_seconds, tracks.tick),
     }
     tasks = []
     for name, (interval, body) in loops.items():

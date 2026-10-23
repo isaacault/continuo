@@ -33,7 +33,7 @@ _state = {"last_scan_seen": None, "scan_requested_at": 0.0, "scanning": False}
 
 
 def waiting() -> list[dict]:
-    rows = req_db.list_requests(statuses=("scanning", "needs_attention"))
+    rows = req_db.list_requests(statuses=("scanning", "needs_attention"), kind="album")
     return [r for r in rows if r["status"] == "scanning"
             or (r.get("attention") or {}).get("reason") in _WATCH_REASONS]
 

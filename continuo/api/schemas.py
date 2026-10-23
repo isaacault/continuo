@@ -32,6 +32,8 @@ class PushIn(BaseModel):
 class RequestIn(BaseModel):
     kind: Literal["album", "track"] = "album"
     musicBrainzReleaseGroupId: str = Field(..., min_length=8, max_length=64)
+    # kind=track: the song (its album is musicBrainzReleaseGroupId).
+    musicBrainzRecordingId: Optional[str] = Field(None, min_length=8, max_length=64)
     note: Optional[str] = Field(None, max_length=500)
 
 

@@ -287,7 +287,10 @@ def merge_artists(lib_artists: list[dict], catalog: list[dict], limit: int) -> l
 
 
 def merge_tracks(lib_songs: list[dict], catalog: list[dict], index: _LibraryIndex,
-                 requests: dict[str, dict], limit: int) -> list[dict]:
+                 requests: dict[str, dict], limit: int,
+                 track_requests: Optional[dict[str, dict]] = None) -> list[dict]:
+    """[track_requests]: live single-song requests by recording MBID (#24)."""
+    track_requests = track_requests or {}
     results, by_rec, by_key = [], {}, {}
     for s in lib_songs:
         rec = s.get("musicBrainzId") or None
@@ -321,6 +324,8 @@ def merge_tracks(lib_songs: list[dict], catalog: list[dict], index: _LibraryInde
             availability = {"state": "album_in_library", "navidromeAlbumId": mine}
         elif rg in requests:
             availability = _request_availability(requests[rg])
+        elif rec and rec in track_requests:
+            availability = _request_availability(track_requests[rec])
         else:
             availability = {"state": "requestable", "via": "album"}
         results.append({
@@ -409,7 +414,7 @@ async def unified_search(q: str, types: tuple[str, ...], limit: int,
     index = _LibraryIndex(lib_db.all_albums(), user_id)
     requests = req_db.active_by_release_group()
     # Available requests too: an album just made available but not yet indexed still resolves.
-    for r in req_db.list_requests(statuses=("available",), limit=200):
+    for r in req_db.list_requests(statuses=("available",), limit=200, kind="album"):
         requests.setdefault(r["mb_release_group_id"], r)
 
     results: list[dict] = []
@@ -418,5 +423,5 @@ async def unified_search(q: str, types: tuple[str, ...], limit: int,
     if "artist" in want:
         results += merge_artists(library["artist"], cat_artists, limit)
     if "track" in want:
-        results += merge_tracks(library["song"], cat_tracks, index, requests, limit)
+        results += merge_tracks(library["song"], cat_tracks, index, requests, limit, req_db.active_tracks())
     return {"query": q, "sources": sources, "results": results}

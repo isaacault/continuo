@@ -94,7 +94,7 @@ async def update_one(row: dict, queue_index: dict) -> dict:
 
 
 async def tick() -> None:
-    rows = [r for r in req_db.list_requests(statuses=_TRACKED) if r.get("lidarr_album_id")]
+    rows = [r for r in req_db.list_requests(statuses=_TRACKED, kind="album") if r.get("lidarr_album_id")]
     if not rows:
         return
     queue_index = await lidarr.queue_index()
