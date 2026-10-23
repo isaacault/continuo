@@ -219,7 +219,8 @@ docker exec continuo continuo backup
 ```
 
 **Removing albums and the media cache** (issue #23, decided 2026-10-23 with the user): an admin
-can remove an album from Polyphony (`POST /v1/library/albums/{navidromeId}/remove`). continuo
+(`LIBRARY_REMOVAL_ROLE=user` opens it to every account; per-user libraries, #27, will make it
+"remove from my library" for everyone) can remove an album from Polyphony (`POST /v1/library/albums/{navidromeId}/remove`). continuo
 unmonitors it in Lidarr (so it never re-downloads), moves its folder with one rename into
 `<MUSIC_DIR>/.continuo-cache/removed-<ts>-<id>/`, and has Lidarr and Navidrome rescan. Restore
 (`POST /v1/library/removed/{id}/restore`) moves it back to the same path and re-monitors it if it

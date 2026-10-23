@@ -87,6 +87,9 @@ class Settings:
     # The music folder as continuo sees it, mounted read-write. Empty = removal disabled. The cache
     # is <music_dir>/.continuo-cache: same filesystem and mount, so moves are instant renames.
     music_dir: str = ""
+    # Who may remove and restore albums: "admin" (the default, while the library is one shared set
+    # of files) or "user" (every signed-in account). Per-user libraries (#27) make it everyone's.
+    library_removal_role: str = "admin"
     media_cache_max_gb: int = 25
     removed_min_days: int = 7      # undo window: never evicted sooner
     removed_max_days: int = 30     # dropped after this whatever the cache size
@@ -208,6 +211,7 @@ def load(env: dict | None = None) -> Settings:
         musicbrainz_contact=_str(e, "MUSICBRAINZ_CONTACT", "https://github.com/isaacault/continuo"),
         listenbrainz_token=_str(e, "LISTENBRAINZ_TOKEN"),
         music_dir=_url(e, "MUSIC_DIR"),  # a path; _url only trims the trailing slash
+        library_removal_role=_str(e, "LIBRARY_REMOVAL_ROLE", "admin").lower(),
         media_cache_max_gb=_int(e, "MEDIA_CACHE_MAX_GB", 25),
         removed_min_days=_int(e, "REMOVED_MIN_DAYS", 7),
         removed_max_days=_int(e, "REMOVED_MAX_DAYS", 30),
