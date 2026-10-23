@@ -102,6 +102,15 @@ async def album_progress(artist: Optional[str], album: Optional[str]) -> Optiona
     return _aggregate(both or artist_only)
 
 
+async def has_active_downloads() -> bool:
+    """Whether slskd is downloading anything right now (False when it's unreachable)."""
+    if not enabled():
+        return False
+    users = await _downloads()
+    return any(_is_active(f.get("state", ""))
+               for u in users or [] for d in u.get("directories", []) for f in d.get("files", []))
+
+
 async def delete_searches_for(artist: Optional[str], album: Optional[str] = None) -> int:
     """Remove slskd search records for this album (Soularr runs with delete_searches=False, so
     they pile up). Best-effort, never raises."""
