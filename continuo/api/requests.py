@@ -42,6 +42,20 @@ async def _resolve(rows: list[dict], user: CurrentUser) -> list[dict]:
     return await asyncio.gather(*(one(r) for r in rows))
 
 
+async def _already_on_server(user: CurrentUser, store_album: dict) -> None:
+    """Requesting an album the server has: it's in the library, or (an account with its own
+    library, #27) it's put there now, nothing to download. Always ends the request with a 409."""
+    from ..library import ownership
+    from ..search import merge
+    index = merge._LibraryIndex([store_album], user.id)
+    mine = index.mine(store_album)
+    if mine is None:
+        await ownership.add(users_db.get_by_id(user.id), store_album["navidrome_id"])
+        raise ApiError(409, "added_to_library", "It's already on the server, so it's been added to your library.",
+                       storeAlbumId=store_album["navidrome_id"])
+    raise ApiError(409, "in_library", "That album is already in the library.", navidromeAlbumId=mine)
+
+
 @router.post("", status_code=201)
 async def create_request(body: RequestIn, user: CurrentUser = Depends(require_user)) -> dict:
     rg = body.musicBrainzReleaseGroupId.lower()
@@ -51,8 +65,7 @@ async def create_request(body: RequestIn, user: CurrentUser = Depends(require_us
                        requestId=existing["id"])
     in_lib = lib_db.by_release_group(rg)
     if in_lib:
-        raise ApiError(409, "in_library", "That album is already in the library.",
-                       navidromeAlbumId=in_lib[0]["navidrome_id"])
+        await _already_on_server(user, in_lib[0])
     try:
         info = await lidarr.lookup_album_by_id(rg)
     except httpx.HTTPError as e:
@@ -63,8 +76,7 @@ async def create_request(body: RequestIn, user: CurrentUser = Depends(require_us
     if album["releaseIds"]:
         lib = lib_db.by_release_ids(album["releaseIds"])
         if lib:
-            raise ApiError(409, "in_library", "That album is already in the library.",
-                           navidromeAlbumId=lib[0]["navidrome_id"])
+            await _already_on_server(user, lib[0])
     row = req_db.create(mb_release_group_id=rg, title=album["title"], artist=album["artist"],
                         year=album["year"], artwork_url=album["imageUrl"], user_id=user.id,
                         note=body.note)

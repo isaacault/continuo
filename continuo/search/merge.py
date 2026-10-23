@@ -69,10 +69,21 @@ def same_by_name(lib_rg: Optional[str], lib_title: Optional[str], rg: Optional[s
     return title is None or _marks(title) == _marks(lib_title)
 
 
-class _LibraryIndex:
-    """Lookups over library_albums (the whole library, not just this query's search3 page)."""
+def on_server(lib: dict) -> dict:
+    """A store album this account's library doesn't have (#27): Add puts it there, instantly."""
+    out = {"state": "on_server", "storeAlbumId": lib["navidrome_id"]}
+    return {**out, "trackCount": lib["song_count"]} if lib.get("song_count") else out
 
-    def __init__(self, albums: list[dict]):
+
+class _LibraryIndex:
+    """Lookups over library_albums (the whole library, not just this query's search3 page).
+
+    With [user_id] whose account has its own library (#27), a store album it doesn't have is
+    "on_server" (mine() is None), and one it has opens with its own library's album id."""
+
+    def __init__(self, albums: list[dict], user_id: Optional[int] = None):
+        from ..library.ownership import Ownership
+        self.own = Ownership(user_id)
         # Untagged albums matched to a release group by title (db.identity) count as tagged.
         from ..db import identity
         matches = identity.album_matches()
@@ -81,6 +92,12 @@ class _LibraryIndex:
         albums = [a if a.get("mbz_release_group_id") or not (m := matches.get(a["navidrome_id"])) or not m["mb_release_group_id"]
                   else {**a, "mbz_release_group_id": m["mb_release_group_id"]} for a in albums]
         self.by_id = {a["navidrome_id"]: a for a in albums}
+        if self.own.enabled:
+            # The account's copies (what its own search3 returns) know what the store album knows.
+            store_by_folder = {a["folder"]: a for a in albums if a.get("folder")}
+            for folder, nd_id in self.own.ids.items():
+                s = store_by_folder.get(folder, {})
+                self.by_id[nd_id] = {**s, "navidrome_id": nd_id}
         self.by_rg, self.by_release, self.by_key = {}, {}, {}
         for a in albums:
             if a.get("mbz_release_group_id"):
@@ -94,6 +111,13 @@ class _LibraryIndex:
         """The artist|title key under the library's own name for the artist, when it has one."""
         name = self.library_names.get(artist_mbid) if artist_mbid else None
         return album_key(name, title) if name and title is not None else None
+
+    def mine(self, lib: dict) -> Optional[str]:
+        """The album id this account opens store album [lib] with; None when it's only on the
+        server (another account has it)."""
+        if not self.own.enabled:
+            return lib["navidrome_id"]
+        return self.own.ids.get(lib.get("folder")) if lib.get("folder") in self.own.mine else None
 
     def find(self, rg: Optional[str], release_ids: list[str], key: str,
              title: Optional[str] = None, artist_mbid: Optional[str] = None) -> Optional[dict]:
@@ -151,23 +175,36 @@ def merge_albums(lib_albums: list[dict], catalog: list[dict], index: _LibraryInd
         # …or into a library album the search page didn't return.
         if target is None:
             lib = index.find(rg, c.get("releaseIds", []), key, c.get("title"), c.get("musicBrainzArtistId"))
+            mine = index.mine(lib) if lib is not None else None
+            if lib is not None and mine is None:
+                results.append({
+                    "kind": "album", "key": f"mb:rg:{rg}" if rg else f"nd:{lib['navidrome_id']}",
+                    "title": c.get("title"), "artist": c.get("artist"), "year": c.get("year"),
+                    "albumType": c.get("albumType"),
+                    "artwork": artwork.catalog_art(c.get("imageUrl")),
+                    "ids": {"musicBrainzReleaseGroupId": rg, "musicBrainzReleaseId": None,
+                            "navidromeAlbumId": None, "lidarrAlbumId": c.get("lidarrAlbumId")},
+                    "availability": on_server(lib),
+                    "_key": key, "_release": None,
+                })
+                continue
             if lib is not None:
-                target = by_nd.get(lib["navidrome_id"])
+                target = by_nd.get(mine)
                 if target is None:
                     target = {
-                        "kind": "album", "key": f"mb:rg:{rg}" if rg else f"nd:{lib['navidrome_id']}",
+                        "kind": "album", "key": f"mb:rg:{rg}" if rg else f"nd:{mine}",
                         "title": lib["name"], "artist": lib.get("artist"), "year": lib.get("year"),
                         "albumType": c.get("albumType"),
-                        "artwork": cover_art(lib["navidrome_id"]),
+                        "artwork": cover_art(mine),
                         "ids": {"musicBrainzReleaseGroupId": rg,
                                 "musicBrainzReleaseId": lib.get("mbz_album_id"),
-                                "navidromeAlbumId": lib["navidrome_id"], "lidarrAlbumId": None},
+                                "navidromeAlbumId": mine, "lidarrAlbumId": None},
                         "availability": {"state": "in_library",
-                                         "navidromeAlbumId": lib["navidrome_id"],
+                                         "navidromeAlbumId": mine,
                                          "trackCount": lib.get("song_count")},
                         "_key": key, "_release": lib.get("mbz_album_id"),
                     }
-                    by_nd[lib["navidrome_id"]] = target
+                    by_nd[mine] = target
                     results.append(target)
         if target is not None:
             ids = target["ids"]
@@ -276,8 +313,12 @@ def merge_tracks(lib_songs: list[dict], catalog: list[dict], index: _LibraryInde
             hit["album"]["musicBrainzReleaseGroupId"] = rg
             continue
         lib = index.by_rg.get(rg)
-        if lib is not None:
-            availability = {"state": "album_in_library", "navidromeAlbumId": lib["navidrome_id"]}
+        mine = index.mine(lib) if lib is not None else None
+        if lib is not None and mine is None:
+            availability = {**on_server(lib), "via": "album"}
+            lib = None
+        elif lib is not None:
+            availability = {"state": "album_in_library", "navidromeAlbumId": mine}
         elif rg in requests:
             availability = _request_availability(requests[rg])
         else:
@@ -285,7 +326,7 @@ def merge_tracks(lib_songs: list[dict], catalog: list[dict], index: _LibraryInde
         results.append({
             "kind": "track", "key": f"mb:rec:{rec}", "title": c.get("title"),
             "artist": c.get("artist"), "durationMs": c.get("durationMs"),
-            "album": dict(c["album"], navidromeAlbumId=lib["navidrome_id"] if lib else None),
+            "album": dict(c["album"], navidromeAlbumId=mine if lib else None),
             "artwork": artwork.catalog_art(c.get("imageUrl")),
             "availability": availability,
         })
@@ -325,7 +366,7 @@ async def _add_renamed_library_artists(library: dict, catalog: list[dict], navid
 
 
 async def unified_search(q: str, types: tuple[str, ...], limit: int,
-                         navidrome_user: str) -> dict:
+                         navidrome_user: str, user_id: Optional[int] = None) -> dict:
     want = set(types)
 
     async def none():
@@ -365,7 +406,7 @@ async def unified_search(q: str, types: tuple[str, ...], limit: int,
     if "artist" in want and cat_artists and not isinstance(library, BaseException):
         await _add_renamed_library_artists(library, cat_artists, navidrome_user)
 
-    index = _LibraryIndex(lib_db.all_albums())
+    index = _LibraryIndex(lib_db.all_albums(), user_id)
     requests = req_db.active_by_release_group()
     # Available requests too: an album just made available but not yet indexed still resolves.
     for r in req_db.list_requests(statuses=("available",), limit=200):

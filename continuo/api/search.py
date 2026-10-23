@@ -34,7 +34,7 @@ async def search(request: Request, q: str = Query(..., min_length=1, max_length=
     wanted = tuple(t for t in (x.strip() for x in types.split(",")) if t in merge.ALL_TYPES)
     if not wanted:
         raise ApiError(400, "invalid_types", "types must be some of album,artist,track.")
-    return await merge.unified_search(q.strip(), wanted, limit, user.navidrome_username)
+    return await merge.unified_search(q.strip(), wanted, limit, user.navidrome_username, user.id)
 
 
 def _album_availability(album: dict, index: merge._LibraryIndex, requests: dict) -> dict:
@@ -42,8 +42,10 @@ def _album_availability(album: dict, index: merge._LibraryIndex, requests: dict)
     lib = index.find(rg, album.get("releaseIds", []), album_key(album.get("artist"), album.get("title")),
                      album.get("title"), album.get("musicBrainzArtistId"))
     if lib is not None:
-        return {"state": "in_library", "navidromeAlbumId": lib["navidrome_id"],
-                "trackCount": lib.get("song_count")}
+        mine = index.mine(lib)
+        if mine is None:
+            return merge.on_server(lib)
+        return {"state": "in_library", "navidromeAlbumId": mine, "trackCount": lib.get("song_count")}
     if rg in requests:
         return merge._request_availability(requests[rg])
     if album.get("owned"):
@@ -67,14 +69,14 @@ def _album_out(album: dict, availability: dict) -> dict:
 
 @router.get("/catalog/artists/{mbid}/albums")
 async def artist_albums(request: Request, mbid: str,
-                        _user: CurrentUser = Depends(require_user)) -> list[dict]:
+                        user: CurrentUser = Depends(require_user)) -> list[dict]:
     catalog_limiter.check(request)
     mbid = _check_mbid(mbid)
     albums = await lidarr.artist_albums(mbid)
     # Untagged library albums by this artist, under either name, matched by release title first.
     names = {albums[0].get("artist") if albums else None, identity.library_name(mbid)}
     await album_match.match_artist(mbid, {n for n in names if n}, albums)
-    index = merge._LibraryIndex(lib_db.all_albums())
+    index = merge._LibraryIndex(lib_db.all_albums(), user.id)
     requests = req_db.active_by_release_group()
     return [_album_out(a, _album_availability(a, index, requests)) for a in albums]
 
@@ -93,10 +95,10 @@ async def resolve_artist(request: Request, name: str = Query(..., min_length=1, 
 
 @router.get("/catalog/artists/{mbid}")
 async def catalog_artist(request: Request, mbid: str,
-                         _user: CurrentUser = Depends(require_user)) -> dict:
+                         user: CurrentUser = Depends(require_user)) -> dict:
     """An artist's page for any artist: name, picture, biography, top songs, similar artists."""
     catalog_limiter.check(request)
-    page = await artist_info.build(_check_mbid(mbid))
+    page = await artist_info.build(_check_mbid(mbid), user.id)
     if page is None:
         raise ApiError(404, "not_found", "Artist not found in the catalogue.")
     return page
@@ -104,13 +106,13 @@ async def catalog_artist(request: Request, mbid: str,
 
 @router.get("/catalog/albums/{mbid}")
 async def catalog_album(request: Request, mbid: str,
-                        _user: CurrentUser = Depends(require_user)) -> dict:
+                        user: CurrentUser = Depends(require_user)) -> dict:
     catalog_limiter.check(request)
     info = await lidarr.lookup_album_by_id(_check_mbid(mbid))
     if not info:
         raise ApiError(404, "not_found", "Album not found in the catalogue.")
     album = lidarr.normalize_album(info)
-    index = merge._LibraryIndex(lib_db.all_albums())
+    index = merge._LibraryIndex(lib_db.all_albums(), user.id)
     out = _album_out(album, _album_availability(album, index, req_db.active_by_release_group()))
     out["tracks"] = await musicbrainz.album_tracks(mbid)
     return out
