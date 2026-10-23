@@ -65,10 +65,22 @@ def test_remove_moves_the_album_into_the_cache_and_restore_puts_it_back(client, 
     assert _monitor_calls(fake) == [False, True], "monitored again, as it was before"
 
 
-def test_only_admins_remove(client, fake, music):
-    make_user()
+def test_a_server_can_open_removal_to_every_account(client, fake, music, monkeypatch):
+    make_user("admin")
+    make_user("isaac", role="user")
+    monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, library_removal_role="user"))
+    s = login(client, "isaac")
+    assert "library_removal" in client.get("/v1/me", headers=bearer(s)).json()["capabilities"]
+    r = client.post("/v1/library/albums/nd-1/remove", headers=bearer(s))
+    assert r.status_code == 200, r.text
+    assert r.json()["removedBy"] == "isaac"
+
+
+def test_removal_is_for_admins_by_default_and_others_get_no_button(client, fake, music):
+    make_user("admin")
     make_user("bob", role="user")
     s = login(client, "bob")
+    assert "library_removal" not in client.get("/v1/me", headers=bearer(s)).json()["capabilities"]
     assert client.post("/v1/library/albums/nd-1/remove", headers=bearer(s)).status_code == 403
     assert (music / "Boards of Canada" / "Geogaddi (2002)").exists()
 
