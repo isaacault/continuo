@@ -87,6 +87,10 @@ class Settings:
     # The music folder as continuo sees it, mounted read-write. Empty = removal disabled. The cache
     # is <music_dir>/.continuo-cache: same filesystem and mount, so moves are instant renames.
     music_dir: str = ""
+    # Per-user libraries (#27): each account's library is <libraries_dir>/<Navidrome username>/,
+    # hardlinks into the store (MUSIC_DIR) on the same filesystem and mount. Empty = off.
+    libraries_dir: str = ""
+    library_sync_seconds: int = 300
     # Artists named in a non-Latin script get MusicBrainz's primary alias in this language as
     # their library name (青葉市子 -> Ichiko Aoba); "original" keeps names as they are.
     name_locale: str = "en"
@@ -230,6 +234,8 @@ def load(env: dict | None = None) -> Settings:
         music_dir=_url(e, "MUSIC_DIR"),  # a path; _url only trims the trailing slash
         library_removal_role=_str(e, "LIBRARY_REMOVAL_ROLE", "admin").lower(),
         name_locale=_str(e, "NAME_LOCALE", "en").lower(),
+        libraries_dir=_url(e, "LIBRARIES_DIR"),
+        library_sync_seconds=_int(e, "LIBRARY_SYNC_SECONDS", 300),
         lidarr_downloads_path=_url(e, "LIDARR_DOWNLOADS_PATH", "/data/downloads"),
         media_cache_max_gb=_int(e, "MEDIA_CACHE_MAX_GB", 25),
         removed_min_days=_int(e, "REMOVED_MIN_DAYS", 7),
