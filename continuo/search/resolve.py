@@ -79,7 +79,7 @@ async def resolve(name: str) -> Optional[dict]:
     # max() keeps the first of equals: Lidarr's order breaks ties.
     (in_lidarr, shared, _named), best = max(ranked, key=lambda p: p[0])
     if normalise(best.get("name")) != key:
-        identity.set_library_name(best["musicBrainzArtistId"], name)
+        identity.set_library_name(best["musicBrainzArtistId"], name, original_name=best.get("name"))
     return {"musicBrainzArtistId": best["musicBrainzArtistId"], "name": best["name"],
             "sharedAlbums": shared, "inLidarr": in_lidarr}
 
@@ -105,5 +105,5 @@ async def library_name_for(mb_artist_id: Optional[str], catalogue_name: Optional
     if len(hits) != 1:
         return None
     name = hits.pop()
-    identity.set_library_name(mb_artist_id, name)
+    identity.set_library_name(mb_artist_id, name, original_name=catalogue_name)
     return name

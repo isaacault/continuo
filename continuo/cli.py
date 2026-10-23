@@ -1,5 +1,5 @@
-"""continuo CLI: migrate, create-user, set-role, merge-artist, import-lidseeker, backup, policy-check,
-refresh-library.
+"""continuo CLI: migrate, create-user, set-role, merge-artist, latin-names, import-lidseeker, backup,
+policy-check, refresh-library.
 
 Run inside the container: `docker exec -it continuo continuo <command>`."""
 import argparse
@@ -81,6 +81,32 @@ def cmd_merge_artist(args) -> int:
     except Exception as e:  # noqa: BLE001
         print(f"rescan didn't start ({e}); Navidrome's watcher will catch up", file=sys.stderr)
     print(f"{changed} file(s) now by {args.into}")
+    return 0
+
+
+def cmd_latin_names(args) -> int:
+    """Preview (or --apply) giving non-Latin artists their NAME_LOCALE name on the albums Lidarr
+    downloaded; the user's own copies are listed and never touched."""
+    import asyncio
+
+    from .library import cache, latin_names
+    from .upstream import navidrome
+    _migrate()
+    plans, notes = asyncio.run(latin_names.plan())
+    print(latin_names.describe(plans, notes))
+    if not args.apply:
+        print("\n(preview only: run again with --apply to retag the albums marked 'retag')")
+        return 0
+    try:
+        changed = latin_names.apply(plans)
+    except cache.Unavailable:
+        print("MUSIC_DIR isn't set or mounted", file=sys.stderr)
+        return 1
+    try:
+        asyncio.run(navidrome.start_scan())
+    except Exception as e:  # noqa: BLE001
+        print(f"rescan didn't start ({e}); Navidrome's watcher will catch up", file=sys.stderr)
+    print(f"\nretagged {changed} file(s)")
     return 0
 
 
@@ -270,6 +296,9 @@ def main(argv: list[str] | None = None) -> int:
     ma.add_argument("--into", required=True, help="the library's name for the artist")
     ma.add_argument("--mbid", help="the MusicBrainz artist id, so future imports use --into too")
     ma.set_defaults(fn=cmd_merge_artist)
+    ln = sub.add_parser("latin-names", help="preview/apply NAME_LOCALE names for non-Latin artists")
+    ln.add_argument("--apply", action="store_true", help="retag (default: preview only)")
+    ln.set_defaults(fn=cmd_latin_names)
     il = sub.add_parser("import-lidseeker")
     il.add_argument("path")
     il.add_argument("--no-match", action="store_true",

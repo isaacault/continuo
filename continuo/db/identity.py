@@ -3,11 +3,24 @@ ids (see migrations/0004)."""
 from .conn import connect, now, rows
 
 
-def set_library_name(mb_artist_id: str, library_name: str) -> None:
+def set_library_name(mb_artist_id: str, library_name: str, original_name: str | None = None,
+                     sort_name: str | None = None) -> None:
+    """Remember the library's name for a MusicBrainz artist; original and sort names are kept
+    when not given again."""
     with connect() as c:
-        c.execute("INSERT INTO artist_names (mb_artist_id, library_name, updated_at) VALUES (?, ?, ?) "
-                  "ON CONFLICT (mb_artist_id) DO UPDATE SET library_name=excluded.library_name, "
-                  "updated_at=excluded.updated_at", (mb_artist_id, library_name, now()))
+        c.execute("INSERT INTO artist_names (mb_artist_id, library_name, original_name, sort_name, updated_at) "
+                  "VALUES (?, ?, ?, ?, ?) ON CONFLICT (mb_artist_id) DO UPDATE SET "
+                  "library_name=excluded.library_name, "
+                  "original_name=COALESCE(excluded.original_name, artist_names.original_name), "
+                  "sort_name=COALESCE(excluded.sort_name, artist_names.sort_name), updated_at=excluded.updated_at",
+                  (mb_artist_id, library_name, original_name, sort_name, now()))
+
+
+def artist_names() -> list[dict]:
+    """Every remembered artist: mb_artist_id, library_name, original_name, sort_name."""
+    with connect() as c:
+        return rows(c.execute("SELECT mb_artist_id, library_name, original_name, sort_name FROM artist_names "
+                              "ORDER BY library_name"))
 
 
 def library_name(mb_artist_id: str | None) -> str | None:

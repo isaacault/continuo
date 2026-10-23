@@ -87,6 +87,12 @@ class Settings:
     # The music folder as continuo sees it, mounted read-write. Empty = removal disabled. The cache
     # is <music_dir>/.continuo-cache: same filesystem and mount, so moves are instant renames.
     music_dir: str = ""
+    # Artists named in a non-Latin script get MusicBrainz's primary alias in this language as
+    # their library name (青葉市子 -> Ichiko Aoba); "original" keeps names as they are.
+    name_locale: str = "en"
+    # Lidarr's downloads folder as Lidarr sees it: albums imported from here were downloaded
+    # (and may be retagged); anything else is the user's own and is never touched.
+    lidarr_downloads_path: str = "/data/downloads"
     # Who may remove and restore albums: "admin" (the default, while the library is one shared set
     # of files) or "user" (every signed-in account). Per-user libraries (#27) make it everyone's.
     library_removal_role: str = "admin"
@@ -212,6 +218,8 @@ def load(env: dict | None = None) -> Settings:
         listenbrainz_token=_str(e, "LISTENBRAINZ_TOKEN"),
         music_dir=_url(e, "MUSIC_DIR"),  # a path; _url only trims the trailing slash
         library_removal_role=_str(e, "LIBRARY_REMOVAL_ROLE", "admin").lower(),
+        name_locale=_str(e, "NAME_LOCALE", "en").lower(),
+        lidarr_downloads_path=_url(e, "LIDARR_DOWNLOADS_PATH", "/data/downloads"),
         media_cache_max_gb=_int(e, "MEDIA_CACHE_MAX_GB", 25),
         removed_min_days=_int(e, "REMOVED_MIN_DAYS", 7),
         removed_max_days=_int(e, "REMOVED_MAX_DAYS", 30),

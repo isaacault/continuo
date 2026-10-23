@@ -172,13 +172,21 @@ async def _file_under_library_name(artist: dict, paths: list[str]) -> None:
     """An album Lidarr imported for an artist the library knows by another name (Ichiko Aoba
     for 青葉市子): retag it with the library's name before Navidrome indexes it, so it joins the
     library's artist instead of becoming a second one. Best effort; needs MUSIC_DIR."""
-    from ..library import cache, tags
+    from ..db import identity
+    from ..library import cache, naming, tags
     from ..search import resolve
     mb_name = artist.get("name")
+    mbid = artist.get("mbid") or artist.get("foreignartistid")
     try:
-        lib_name = await resolve.library_name_for(artist.get("mbid") or artist.get("foreignartistid"), mb_name)
+        lib_name = await resolve.library_name_for(mbid, mb_name)
+        # A non-Latin name the library doesn't know yet: MusicBrainz's alias for NAME_LOCALE.
+        pref = await naming.preferred(mbid)
+        if not lib_name and pref:
+            lib_name = pref["name"]
         if not lib_name or normalise(lib_name) == normalise(mb_name):
             return
+        sort = pref["sort"] if pref and normalise(pref["name"]) == normalise(lib_name) else None
+        identity.set_library_name(mbid, lib_name, original_name=mb_name, sort_name=sort)
         music = cache.music_dir()
     except cache.Unavailable:
         log.warning("import: %s is %s in the library, but MUSIC_DIR isn't mounted to retag it", mb_name, lib_name)
@@ -187,7 +195,7 @@ async def _file_under_library_name(artist: dict, paths: list[str]) -> None:
         log.exception("import: library name lookup failed")
         return
     files = [p for p in (tags.library_path(x, music) for x in paths) if p]
-    changed = await asyncio.to_thread(tags.rename_artist, files, {mb_name or ""}, lib_name)
+    changed = await asyncio.to_thread(tags.rename_artist, files, {mb_name or ""}, lib_name, sort)
     log.info("import: filed %d file(s) by %s under the library's %s", changed, mb_name, lib_name)
 
 

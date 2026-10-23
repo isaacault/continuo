@@ -164,3 +164,24 @@ async def release_group_for_title(artist_mbid: str, title: str) -> Optional[str]
         if rg and int(rel.get("score") or 0) >= 90:
             return rg
     return None
+
+
+_artist_cache: dict[str, tuple[float, Optional[dict]]] = {}
+_ARTIST_TTL = 24 * 3600.0
+
+
+async def artist_names(artist_mbid: str) -> Optional[dict]:
+    """{name, sortName, aliases: [{name, locale, primary}]} for a MusicBrainz artist; None when
+    MusicBrainz didn't answer. Cached a day: names hardly change."""
+    hit = _artist_cache.get(artist_mbid)
+    if hit and time.monotonic() - hit[0] < _ARTIST_TTL:
+        return hit[1]
+    try:
+        a = await _get(f"/artist/{artist_mbid}", {"inc": "aliases"})
+    except (httpx.HTTPError, ValueError):
+        return None
+    out = {"name": a.get("name"), "sortName": a.get("sort-name"),
+           "aliases": [{"name": al.get("name"), "locale": al.get("locale"), "primary": bool(al.get("primary"))}
+                       for al in a.get("aliases") or [] if al.get("name")]}
+    _artist_cache[artist_mbid] = (time.monotonic(), out)
+    return out
