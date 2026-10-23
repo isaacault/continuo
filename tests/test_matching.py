@@ -75,3 +75,39 @@ def test_weak_title_only_match_is_ambiguous_not_linked():
 
 def test_nothing_in_library():
     assert not matching.match(ROW, [lib("a", "Other")]).matched
+
+
+# ---- library matching by name (the "0" vs "0%" lesson) --------------------------------------
+
+def _lib(nd, name, artist, rg=None, release=None):
+    from continuo.requests.normalise import album_key
+    return {"navidrome_id": nd, "name": name, "artist": artist, "mbz_release_group_id": rg,
+            "mbz_album_id": release, "norm_key": album_key(artist, name)}
+
+
+def test_a_symbol_normalise_drops_still_makes_a_different_album():
+    from continuo.requests.normalise import album_key
+    from continuo.search.merge import _LibraryIndex
+    index = _LibraryIndex([_lib("nd-live", "0%", "Ichiko Aoba")])
+    # Ichiko Aoba's studio album "0" is not her live album "0%", though both normalise to "0".
+    assert index.find(None, [], album_key("Ichiko Aoba", "0"), "0") is None
+    assert index.find(None, [], album_key("Ichiko Aoba", "0%"), "0%")["navidrome_id"] == "nd-live"
+
+
+def test_different_release_groups_never_match_by_name():
+    from continuo.requests.normalise import album_key
+    from continuo.search.merge import _LibraryIndex
+    index = _LibraryIndex([_lib("nd-album", "Magpie", "Peach Pit", rg="rg-album")])
+    assert index.find("rg-single", [], album_key("Peach Pit", "Magpie"), "Magpie") is None
+    assert index.find("rg-album", [], album_key("Peach Pit", "Magpie"), "Magpie")["navidrome_id"] == "nd-album"
+    # An untagged library album still matches by name (the fix/88 case: punctuation, editions).
+    index = _LibraryIndex([_lib("nd-1", "You and Your Friends (Deluxe)", "Peach Pit")])
+    assert index.find("rg-yayf", [], album_key("Peach Pit", "You & Your Friends"), "You & Your Friends")["navidrome_id"] == "nd-1"
+
+
+def test_two_library_albums_with_one_key_are_both_reachable():
+    from continuo.requests.normalise import album_key
+    from continuo.search.merge import _LibraryIndex
+    index = _LibraryIndex([_lib("nd-live", "0%", "Ichiko Aoba"), _lib("nd-studio", "0", "Ichiko Aoba")])
+    assert index.find(None, [], album_key("Ichiko Aoba", "0"), "0")["navidrome_id"] == "nd-studio"
+    assert index.find(None, [], album_key("Ichiko Aoba", "0%"), "0%")["navidrome_id"] == "nd-live"
