@@ -85,15 +85,17 @@ async def me(user: CurrentUser = Depends(require_user)) -> dict:
 
 
 def capabilities(user: CurrentUser) -> list[str]:
-    """What this server offers this account; library_removal when the music folder is mounted
-    and the account may remove (LIBRARY_REMOVAL_ROLE)."""
-    from ..library import cache
+    """What this server offers this account: library_removal when the music folder is mounted
+    and the account may remove (its own library, or LIBRARY_REMOVAL_ROLE); own_library when it
+    has a library of its own (#27: albums on the server but not in it can be added)."""
+    from ..library import cache, ownership
     from .library import may_remove
     try:
         cache.music_dir()
     except cache.Unavailable:
         return CAPABILITIES
-    return CAPABILITIES + ["library_removal"] if may_remove(user) else CAPABILITIES
+    out = CAPABILITIES + ["library_removal"] if may_remove(user) else list(CAPABILITIES)
+    return out + ["own_library"] if ownership.has_own_library(user.id) else out
 
 
 @router.get("/me/library")

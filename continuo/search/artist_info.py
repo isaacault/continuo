@@ -17,7 +17,7 @@ from ..db import requests as req_db
 from ..requests.normalise import album_key, normalise
 from ..upstream import lidarr, listenbrainz, wikipedia
 from .cache import TTLCache, cached
-from .merge import _LibraryIndex, _request_availability
+from .merge import _LibraryIndex, _request_availability, on_server
 
 # Artist facts change slowly; the page is opened often (every tap on an artist).
 _cache = TTLCache(ttl=6 * 3600, max_items=256)
@@ -49,8 +49,11 @@ def _top_track(t: dict, albums_by_title: dict[str, dict], index: _LibraryIndex,
     rg = (album or {}).get("musicBrainzReleaseGroupId")
     lib = index.find(rg, [t["releaseMbid"]] if t.get("releaseMbid") else [],
                      album_key(t.get("artist"), t.get("releaseName")), t.get("releaseName"), artist_mbid)
-    if lib is not None:
-        availability = {"state": "album_in_library", "navidromeAlbumId": lib["navidrome_id"]}
+    mine = index.mine(lib) if lib is not None else None
+    if lib is not None and mine is None:
+        availability = {**on_server(lib), "via": "album"}
+    elif lib is not None:
+        availability = {"state": "album_in_library", "navidromeAlbumId": mine}
     elif rg and rg in requests:
         availability = _request_availability(requests[rg])
     elif rg:
@@ -62,7 +65,7 @@ def _top_track(t: dict, albums_by_title: dict[str, dict], index: _LibraryIndex,
         "kind": "track", "key": f"mb:rec:{rec}" if rec else f"cat:{normalise(t['title'])}",
         "title": t["title"], "artist": t.get("artist"), "durationMs": t.get("durationMs"),
         "album": {"title": t.get("releaseName"), "musicBrainzReleaseGroupId": rg,
-                  "navidromeAlbumId": lib["navidrome_id"] if lib else None},
+                  "navidromeAlbumId": mine},
         "availability": availability,
     }
 
@@ -71,7 +74,7 @@ def _library_artist_names() -> set[str]:
     return {normalise(a.get("artist")) for a in lib_db.all_albums() if a.get("artist")}
 
 
-async def build(mbid: str) -> Optional[dict]:
+async def build(mbid: str, user_id: Optional[int] = None) -> Optional[dict]:
     """The page for artist [mbid]; None when no source knows the artist."""
     up = await cached(_cache, mbid, lambda: _upstream(mbid))
     meta, lb_meta = up["meta"] or {}, up["lb_meta"] or {}
@@ -83,7 +86,7 @@ async def build(mbid: str) -> Optional[dict]:
 
     top_tracks = None
     if up["top"] is not None:
-        index = _LibraryIndex(lib_db.all_albums())
+        index = _LibraryIndex(lib_db.all_albums(), user_id)
         requests = req_db.active_by_release_group()
         albums_by_title = {}
         try:

@@ -18,6 +18,7 @@ from .. import config
 from ..db import library as lib_db
 from ..db import requests as req_db
 from ..db.conn import now, seconds_since
+from ..library import ownership
 from ..notify import dispatch
 from ..requests import matching, orchestrate
 from ..upstream import lidarr, navidrome, slskd
@@ -152,6 +153,14 @@ async def tick() -> None:
     for row in rows:
         m = await try_match(row)
         if m.matched:
+            # Into the requester's own library (#27); available once Navidrome has indexed it there.
+            store_album = lib_db.get(m.navidrome_album_id) or {}
+            ready, mine = await ownership.claim(row.get("user_id"), store_album)
+            if not ready:
+                still.append(row)
+                continue
+            if mine:
+                m.navidrome_album_id = mine
             await mark_available(row, m)
             continue
         if m.ambiguous:
