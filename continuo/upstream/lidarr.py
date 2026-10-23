@@ -493,12 +493,26 @@ async def queue_index() -> dict[int, dict]:
         return {}
 
 
-async def remove_queue_item(queue_id: int) -> None:
-    """Drop a download: remove it from the client and blocklist the release, so the album stays
-    wanted and Soularr (which skips albums already in the queue) can pick it up."""
+async def remove_queue_item(queue_id: int, blocklist: bool = True) -> None:
+    """Drop a download: remove it from the client and (by default) blocklist the release, so the
+    album stays wanted and Soularr (which skips albums already in the queue) can pick it up. A
+    race's slow loser isn't blocklisted: it wasn't bad, only slower."""
     r = await _client().delete(f"/queue/{queue_id}", params={
-        "removeFromClient": "true", "blocklist": "true",
+        "removeFromClient": "true", "blocklist": "true" if blocklist else "false",
     })
+    r.raise_for_status()
+
+
+async def album_tracks(album_id: int) -> list[dict]:
+    """The album's tracks as Lidarr knows them (title, trackNumber, mediumNumber)."""
+    r = await _client().get("/track", params={"albumId": album_id})
+    r.raise_for_status()
+    return r.json()
+
+
+async def import_folder(path: str) -> None:
+    """Have Lidarr import a downloaded folder (Lidarr's own path), as Soularr does."""
+    r = await _client().post("/command", json={"name": "DownloadedAlbumsScan", "path": path})
     r.raise_for_status()
 
 

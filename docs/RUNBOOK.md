@@ -234,6 +234,20 @@ streamed and prefetched music ("play now", #12) under one eviction policy. Refus
 with another album, an artist root, anything outside `MUSIC_DIR`. Restic's music backup includes
 the cache, so a removed album also survives in older snapshots. Check: `ls -la
 /ssd/data/media/music/.continuo-cache` after a removal; `GET /v1/library/removed`.
+**Racing slow downloads** (#31, decided 2026-10-23 with the user): a request's torrent that is
+slow after `RACE_GRACE_MIN` (10) minutes (its speed so far won't finish within `RACE_SLOW_MIN` (60)
+minutes, or nothing arrived for `RACE_IDLE_MIN` (10)) gets **Soulseek racing it**, without stopping
+it. Soularr can't do this (it skips albums in Lidarr's queue), so continuo searches slskd itself
+and enqueues the best folder: the album title in its name, at least 80 % of Lidarr's tracklist,
+all files in Soularr's `allowed_filetypes`, then format order, free slot, queue, speed. When
+every file is done, Lidarr imports the folder (`DownloadedAlbumsScan` on
+`LIDARR_SOULSEEK_PATH/<folder>`). **The first import wins**: Soulseek winning removes the torrent
+from Lidarr and qBittorrent *without blocklisting* it; the torrent winning cancels the slskd
+transfers and deletes the folder (`SLSKD_DOWNLOADS_DIR`, continuo's view; empty = left for
+Soularr/torrent-cleanup). At most 2 attempts per request; a racer Lidarr doesn't import within
+2 h is written off. Turn off with `RACE_ENABLED=false`. Events: `race_started`, `race_won`,
+`race_failed`.
+
 **Latin names for non-Latin artists** (decided 2026-10-23 with the user): with `NAME_LOCALE=en`
 (default; `original` turns it off), an artist whose MusicBrainz name isn't Latin script gets
 MusicBrainz's *primary alias for that language* as its library name, and MusicBrainz's sort name

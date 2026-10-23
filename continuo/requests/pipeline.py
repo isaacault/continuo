@@ -133,10 +133,16 @@ async def compute(row: dict, queue_index: Optional[dict[int, dict]] = None) -> d
     # Lidarr's own queue can't see.
     prog = await slskd.album_progress(row.get("artist"), row.get("title"))
     if prog and prog["active"]:
+        # A race (#31): Soulseek started because the torrent was slow; both keep going.
+        racing = ""
+        tq = (queue_index or {}).get(album_id) if queue_index is not None else None
+        if tq and tq.get("protocol") == "torrent" and tq.get("size"):
+            t_pct = round(100 * (tq["size"] - (tq.get("sizeLeft") or 0)) / tq["size"])
+            racing = f" · racing the torrent ({t_pct}%)"
         return build(
             "downloading", percent=prog["percent"], files=files, total=total, source="soulseek",
             detail=f"Downloading from Soulseek — {prog['filesDone']}/{prog['filesTotal']} files"
-                   + (f" from {prog['username']}" if prog.get("username") else ""),
+                   + (f" from {prog['username']}" if prog.get("username") else "") + racing,
             download={"client": "slskd", "sizeLeft": None, "timeLeft": None, "stalled": False,
                       "filesDone": prog["filesDone"], "filesTotal": prog["filesTotal"]},
             row=row,

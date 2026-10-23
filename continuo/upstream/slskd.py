@@ -102,6 +102,26 @@ async def album_progress(artist: Optional[str], album: Optional[str]) -> Optiona
     return _aggregate(both or artist_only)
 
 
+async def transfers(username: str) -> Optional[list[dict]]:
+    """This user's download transfers (id, filename, state, percentComplete); None if unreachable."""
+    try:
+        r = await _client().get(f"/transfers/downloads/{username}")
+        if r.status_code == 404:
+            return []
+        r.raise_for_status()
+        return [f for d in r.json().get("directories") or [] for f in d.get("files") or []]
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
+async def cancel(username: str, transfer_id: str) -> None:
+    """Cancel a download and drop its record (best effort)."""
+    try:
+        await _client().delete(f"/transfers/downloads/{username}/{transfer_id}", params={"remove": "true"})
+    except httpx.HTTPError:
+        pass
+
+
 async def has_active_downloads() -> bool:
     """Whether slskd is downloading anything right now (False when it's unreachable)."""
     if not enabled():
