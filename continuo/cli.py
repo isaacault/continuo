@@ -152,7 +152,11 @@ def cmd_libraries(args) -> int:
             if acc is None:
                 print(f"{user['username']} has no library yet: run init first", file=sys.stderr)
                 return 1
-            out = asyncio.run(carry.carry(users.navidrome_name(user), acc["navidrome_library_id"], args.dry_run))
+            async def run_carry() -> dict:
+                if not args.dry_run:
+                    await accounts.grant_store_and_own(user)   # to rate and list its new songs
+                return await carry.carry(users.navidrome_name(user), acc["navidrome_library_id"], args.dry_run)
+            out = asyncio.run(run_carry())
             print(("would carry" if args.dry_run else "carried") +
                   f": {out['songs']} song(s) matched ({out['unmatched_songs']} not in the new library), "
                   f"{out['ratings']} rating(s), {out['stars']} star(s), {out['playlists']} playlist(s) "

@@ -32,8 +32,12 @@ def nd(fake, monkeypatch):
     sent = []
 
     def native(req: httpx.Request):
-        assert req.headers.get("remote-user") == "isaac", "read as the account, for its own ratings"
-        data = songs if req.url.path.endswith("/song") else albums
+        who = req.headers.get("remote-user")
+        if req.url.path.endswith("/song"):
+            # Navidrome gives a non-admin no new library by itself: isaac sees only the store.
+            data = songs if who != "isaac" else [x for x in songs if x["libraryId"] == 1]
+        else:
+            data = albums
         return httpx.Response(200, json=data, headers={"x-total-count": str(len(data))})
 
     def rest(req: httpx.Request):

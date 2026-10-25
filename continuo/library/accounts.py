@@ -46,14 +46,26 @@ async def ensure_library(user: dict) -> int:
     return int(lib["id"])
 
 
-async def grant_only_own(user: dict) -> None:
-    """Give the account's Navidrome user access to its own library alone."""
-    lib_id = await ensure_library(user)
+async def _grant(user: dict, library_ids: list[int]) -> None:
     nd_user = await navidrome_user(users_db.navidrome_name(user))
     if nd_user is None:
         raise LookupError(f"no Navidrome user {users_db.navidrome_name(user)!r}")
-    await navidrome.native_send("PUT", f"user/{nd_user['id']}/library", {"libraryIds": [lib_id]})
+    await navidrome.native_send("PUT", f"user/{nd_user['id']}/library", {"libraryIds": library_ids})
+
+
+async def grant_only_own(user: dict) -> None:
+    """Give the account's Navidrome user access to its own library alone."""
+    lib_id = await ensure_library(user)
+    await _grant(user, [lib_id])
     log.info("libraries: %s now sees only library %s", user["username"], lib_id)
+
+
+async def grant_store_and_own(user: dict) -> None:
+    """Both libraries, while carrying ratings and playlists over: the account has to reach its
+    new library's songs to rate them and put them in its playlists. grant_only_own ends it."""
+    lib_id = await ensure_library(user)
+    await _grant(user, [config.settings.store_library_id, lib_id])
+    log.info("libraries: %s sees the store and library %s while carrying over", user["username"], lib_id)
 
 
 async def scan_until(lib_id: int, expected: int, timeout_s: float = 1800, poll_s: float = 10) -> int:
