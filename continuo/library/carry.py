@@ -14,7 +14,7 @@ from ..upstream import navidrome
 log = logging.getLogger("continuo")
 
 
-async def _all(path: str, as_user: str, page: int = 500) -> list[dict]:
+async def _all(path: str, as_user: str | None, page: int = 500) -> list[dict]:
     out, start = [], 0
     while True:
         data, total = await navidrome.native_get(path, {"_start": start, "_end": start + page}, as_user=as_user)
@@ -26,7 +26,13 @@ async def _all(path: str, as_user: str, page: int = 500) -> list[dict]:
 
 async def carry(nd_user: str, own_library: int, dry_run: bool = False) -> dict:
     store = config.settings.store_library_id
+    # The account's annotations are on the songs it sees (the store); its new library may not be
+    # one of them yet (Navidrome gives a non-admin no library by itself), so that library's songs
+    # come from the service user. Where the account sees them too, its own view wins.
     songs = await _all("song", nd_user)
+    own = [s for s in await _all("song", None) if s.get("libraryId") == own_library]
+    seen = {s["id"] for s in songs}
+    songs += [s for s in own if s["id"] not in seen]
     mine = {s["path"]: s for s in songs if s.get("libraryId") == own_library}
     song_map = {s["id"]: mine[s["path"]] for s in songs
                 if s.get("libraryId") == store and s.get("path") in mine}
