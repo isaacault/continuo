@@ -39,7 +39,53 @@ class Unavailable(Exception):
 _RETRY_WAITS = (1.0, 3.0)
 
 
+# How long an answer on disk is fresh: a release's tracklist practically never changes; names
+# and release lists now and then; searches find new things. Stale answers are still used when
+# MusicBrainz can't be asked.
+_TTL_DAYS = {"release": 30, "search": 1}
+_TTL_DEFAULT_DAYS = 7
+_CACHE_MAX_BYTES = 200 * 1024 * 1024
+_writes = 0
+
+
+def _cache_key(path: str, params: dict) -> str:
+    return path + "?" + "&".join(f"{k}={params[k]}" for k in sorted(params))
+
+
+def _ttl_s(path: str, params: dict) -> float:
+    kind = "search" if "query" in params else path.strip("/").split("/")[0]
+    return _TTL_DAYS.get(kind, _TTL_DEFAULT_DAYS) * 86400.0
+
+
 async def _get(path: str, params: dict, retries: int = len(_RETRY_WAITS)) -> dict:
+    """A MusicBrainz answer: from the disk cache while fresh, else asked (and kept). When
+    MusicBrainz can't be asked (still busy after the retries, or unreachable), a stale cached
+    answer is used; without one the error is raised. A 404 is never cached or covered."""
+    from ..db import musicbrainz_cache as cache_db
+    from ..db.conn import seconds_since
+    global _writes
+    key = _cache_key(path, params)
+    hit = cache_db.get(key)
+    if hit and (seconds_since(hit[1]) or 0) < _ttl_s(path, params):
+        return hit[0]
+    try:
+        body = await _ask(path, params, retries)
+    except httpx.HTTPStatusError as e:
+        if hit and e.response.status_code not in (400, 404):
+            return hit[0]
+        raise
+    except httpx.HTTPError:
+        if hit:
+            return hit[0]
+        raise
+    cache_db.put(key, body)
+    _writes += 1
+    if _writes % 100 == 0:
+        cache_db.prune(_CACHE_MAX_BYTES)
+    return body
+
+
+async def _ask(path: str, params: dict, retries: int) -> dict:
     """One paced MusicBrainz call. A busy MusicBrainz (503 "global" rate limit, 429, other 5xx)
     is retried; httpx.HTTPStatusError when it still fails, or for a 404."""
     global _last_call
