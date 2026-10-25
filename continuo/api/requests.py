@@ -72,12 +72,23 @@ async def _create_track(body: RequestIn, user: CurrentUser) -> dict:
     in_lib = singles.whole(lib_db.by_release_group(rg))
     if in_lib:
         await _already_on_server(user, in_lib[0])
+    from ..upstream import musicbrainz
     try:
         t = await tracks.prepare(rec, rg)
     except LookupError as e:
         raise ApiError(404, "not_found", str(e)) from e
-    except httpx.HTTPError as e:
-        raise UpstreamError("musicbrainz") from e
+    except musicbrainz.Unavailable:
+        # MusicBrainz sheds load with 503s at busy times: take the request now and let the
+        # track loop look the song up once it answers. The title comes from the search the
+        # song was found in, while that's cached.
+        seen = musicbrainz.searched_recording(rec) or {}
+        row = req_db.create(mb_release_group_id=rec, title=seen.get("title"), artist=seen.get("artist"),
+                            year=(seen.get("album") or {}).get("year"), artwork_url=seen.get("imageUrl"),
+                            user_id=user.id, note=body.note, kind="track")
+        row = req_db.update(row["id"], album_release_group_id=rg, track=None)
+        req_db.add_event(row["id"], "requested", {"by": user.username, "kind": "track", "musicbrainz": "busy"})
+        log.info("request %s: song %s by %s (MusicBrainz busy: details later)", row["id"], rec, user.username)
+        return view.to_out(row, tracks.pipeline(row), user.username)
     row = req_db.create(mb_release_group_id=rec, title=t["title"], artist=t["artist"], year=t.get("year"),
                         artwork_url=t.get("imageUrl"), user_id=user.id, note=body.note, kind="track")
     row = req_db.update(row["id"], album_release_group_id=rg, track=t)
