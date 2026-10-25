@@ -40,6 +40,12 @@ def holders(folder: str) -> set[int]:
         return {r[0] for r in c.execute("SELECT user_id FROM library_members WHERE folder=?", (folder,))}
 
 
+def held() -> set[str]:
+    """Every album folder some library has."""
+    with connect() as c:
+        return {r[0] for r in c.execute("SELECT DISTINCT folder FROM library_members")}
+
+
 def user_ids() -> set[int]:
     with connect() as c:
         return {r[0] for r in c.execute("SELECT DISTINCT user_id FROM library_members")}

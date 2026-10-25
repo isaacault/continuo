@@ -105,3 +105,34 @@ def test_off_without_libraries_dir(media, monkeypatch):
     with pytest.raises(links.Unavailable):
         links.roots()
     asyncio.run(links.tick())   # a no-op, not an error
+
+
+def test_an_album_from_outside_a_request_goes_to_the_unclaimed_account(media, monkeypatch):
+    """Drake's Comeback Season came in through Lidarr directly, after the migration: nobody's
+    library had it, so nobody could see it."""
+    import time
+
+    from continuo.db import account_libraries as acc_db
+    from continuo.db import library as lib_db
+    store, libs = media
+    isaac = make_user("isaac", role="user")
+    acc_db.set(isaac["id"], 3, None)
+    members_db.add(isaac["id"], "Ichiko Aoba/0")
+    lib_db.upsert_many([
+        {"navidrome_id": "a", "name": "0", "folder": "Ichiko Aoba/0", "norm_key": "a", "library_id": 1},
+        {"navidrome_id": "b", "name": "Being So Normal", "folder": "Peach Pit/Being So Normal", "norm_key": "b",
+         "library_id": 1},
+        {"navidrome_id": "c", "name": "空中キャンプ", "folder": "Fishmans/空中キャンプ", "norm_key": "c", "library_id": 1}])
+    old = time.time() - 3600
+    os.utime(store / "Peach Pit" / "Being So Normal", (old, old))      # Fishmans' just arrived
+    monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, library_unclaimed_to=("isaac",)))
+    asyncio.run(links.tick())
+    assert members_db.folders(isaac["id"]) == {"Ichiko Aoba/0", "Peach Pit/Being So Normal"}
+    assert (libs / "isaac" / "Peach Pit" / "Being So Normal" / "cover.jpg").exists()
+    assert members_db.holders("Fishmans/空中キャンプ") == set(), "a request may still claim it"
+
+
+def test_nobody_adopts_without_the_setting(media):
+    from continuo.db import library as lib_db
+    lib_db.upsert_many([{"navidrome_id": "b", "name": "B", "folder": "Peach Pit/Being So Normal", "norm_key": "b"}])
+    assert links.adopt_unclaimed(str(media[0])) == 0

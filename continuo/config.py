@@ -98,6 +98,9 @@ class Settings:
     track_download_give_up_seconds: int = 2700
     libraries_dir: str = ""
     library_sync_seconds: int = 300
+    # Accounts (continuo usernames) that get albums reaching the store outside a request (Lidarr's
+    # own UI, a manual copy), which would otherwise be in nobody's library.
+    library_unclaimed_to: tuple[str, ...] = ()
     # The same folder as Navidrome sees it, and the id of Navidrome's library for the store.
     navidrome_libraries_root: str = "/libraries"
     store_library_id: int = 1
@@ -249,6 +252,7 @@ def load(env: dict | None = None) -> Settings:
         track_download_give_up_seconds=_int(e, "TRACK_DOWNLOAD_GIVE_UP_SECONDS", 2700),
         libraries_dir=_url(e, "LIBRARIES_DIR"),
         library_sync_seconds=_int(e, "LIBRARY_SYNC_SECONDS", 300),
+        library_unclaimed_to=tuple(n.strip().lower() for n in _str(e, "LIBRARY_UNCLAIMED_TO", "").split(",") if n.strip()),
         navidrome_libraries_root=_url(e, "NAVIDROME_LIBRARIES_ROOT", "/libraries"),
         store_library_id=_int(e, "STORE_LIBRARY_ID", 1),
         lidarr_downloads_path=_url(e, "LIDARR_DOWNLOADS_PATH", "/data/downloads"),

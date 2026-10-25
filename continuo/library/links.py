@@ -10,6 +10,7 @@ the same, so Navidrome keeps its ids (and the account's ratings) across a relink
 import logging
 import os
 import shutil
+import time
 from dataclasses import dataclass
 
 from .. import config
@@ -165,12 +166,53 @@ def unlink_album(user: dict, folder: str) -> None:
     _prune_empty(os.path.dirname(dst), root)
 
 
+# An album must have sat in the store this long before it counts as unclaimed: a request's own
+# claim (workers/scan) comes first.
+UNCLAIMED_AFTER_S = 600
+
+
+def adopt_unclaimed(store: str) -> int:
+    """Albums in the store that no library has and no live request is for (they came in through
+    Lidarr's own UI, or were copied in) go to LIBRARY_UNCLAIMED_TO's accounts; otherwise nobody
+    would ever see them. Single songs are left to their requests."""
+    from ..db import account_libraries as acc_db
+    from ..db import library as lib_db
+    from ..db import requests as req_db
+    from . import singles
+    names = config.settings.library_unclaimed_to
+    takers = [u for u in (users_db.get(n) for n in names) if u and acc_db.get(u["id"])]
+    if not takers:
+        return 0
+    held, wanted = members_db.held(), set(req_db.active_by_release_group())
+    now = time.time()
+    adopted = 0
+    for a in singles.whole(lib_db.all_albums()):
+        folder = a.get("folder")
+        if not folder or folder in held or a.get("mbz_release_group_id") in wanted:
+            continue
+        path = os.path.join(store, folder)
+        try:
+            if now - os.stat(path).st_mtime < UNCLAIMED_AFTER_S:
+                continue
+        except OSError:
+            continue                      # gone from disk (removed, renamed): nothing to adopt
+        for u in takers:
+            members_db.add(u["id"], folder, "unclaimed")
+        held.add(folder)
+        adopted += 1
+        log.info("libraries: %r came in outside a request; now in %s's library", folder,
+                 ", ".join(u["username"] for u in takers))
+    return adopted
+
+
 async def tick() -> None:
-    """The library sync loop: every account with members gets its folder brought up to date."""
+    """The library sync loop: albums nobody has go to LIBRARY_UNCLAIMED_TO, then every account
+    with members gets its folder brought up to date."""
     try:
         store, libs = roots()
     except (Unavailable, cache.Unavailable):
         return
+    adopt_unclaimed(store)
     for uid in members_db.user_ids():
         user = users_db.get_by_id(uid)
         if not user:
