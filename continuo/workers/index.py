@@ -6,6 +6,7 @@ ExtAuth yet), fall back to Subsonic getAlbumList2: release MBIDs only, no folder
 falls back to release/fuzzy strategies."""
 import asyncio
 import logging
+import os
 
 import httpx
 
@@ -28,6 +29,17 @@ def _year(v) -> int | None:
     return y or None
 
 
+def _on_disk(folder: str) -> bool:
+    """A known folder is still there (true when continuo can't see the music folder): one that
+    went (renamed: Okvsho's "A Place Between Us" became "A place between us") is looked up again."""
+    from ..library.cache import Unavailable, music_dir
+    try:
+        root = music_dir()
+    except Unavailable:
+        return True
+    return os.path.isdir(os.path.join(root, folder))
+
+
 async def _native() -> list[dict]:
     known = lib_db.source_versions()
     albums = [a async for a in navidrome.iter_albums()]
@@ -35,7 +47,7 @@ async def _native() -> list[dict]:
 
     async def folder_for(a: dict) -> str | None:
         prev = known.get(a["id"])
-        if prev and prev[0] == a.get("updatedAt") and prev[1]:
+        if prev and prev[0] == a.get("updatedAt") and prev[1] and _on_disk(prev[1]):
             return prev[1]
         async with sem:
             try:

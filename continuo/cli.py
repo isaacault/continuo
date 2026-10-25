@@ -135,11 +135,14 @@ def cmd_libraries(args) -> int:
         return 1
     try:
         if args.action == "init":
-            out = asyncio.run(accounts.init(user, everything=args.all))
-            print(f"{user['username']}: Navidrome library {out['library']}, {out['albums']} album(s) "
-                  f"({out['added']} added), {out['linked']} file(s) linked")
-            if args.wait:
-                have = asyncio.run(accounts.scan_until(out["library"], out["expected"]))
+            # One event loop for both steps: the HTTP clients belong to the loop that made them.
+            async def init_and_wait() -> tuple[dict, int | None]:
+                out = await accounts.init(user, everything=args.all)
+                print(f"{user['username']}: Navidrome library {out['library']}, {out['albums']} album(s) "
+                      f"({out['added']} added), {out['linked']} file(s) linked", flush=True)
+                return out, (await accounts.scan_until(out["library"], out["expected"]) if args.wait else None)
+            out, have = asyncio.run(init_and_wait())
+            if have is not None:
                 print(f"Navidrome indexed {have}/{out['expected']} album(s) in it")
                 if have < out["expected"]:
                     return 3

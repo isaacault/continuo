@@ -215,3 +215,28 @@ def test_latency_endpoint_and_migration_backfill(client, fake):
     r = client.get("/v1/admin/latency?days=365", headers=bearer(s)).json()
     assert r["bySource"]["soulseek"]["toDownloadStart"]["median"] == 369.0
     assert r["recent"][0]["title"] == "Honeycomb" and r["recent"][0]["toAvailable"] == 1524.0
+
+
+def test_library_index_skips_missing_songs_and_follows_a_renamed_folder(fake, tmp_path, monkeypatch):
+    """Okvsho's "A Place Between Us" was renamed "A place between us" on disk; Navidrome kept the
+    old songs as missing. The folder is the one on disk, and a known folder that's gone is
+    looked up again."""
+    import dataclasses
+
+    from continuo import config
+    from continuo.db import library as lib_db
+    from continuo.workers import index
+    (tmp_path / "Okvsho" / "A place between us").mkdir(parents=True)
+    monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, music_dir=str(tmp_path)))
+    fake.on("GET", f"{ND}/api/album", [
+        {"id": "ok", "name": "A Place Between Us", "albumArtist": "Okvsho", "songCount": 20, "updatedAt": "u1"}],
+        headers={"x-total-count": "1"})
+    fake.on("GET", f"{ND}/api/song", [
+        {"path": "Okvsho/A Place Between Us/01 Sara Serenades the Stars (interlude).mp3", "missing": True},
+        {"path": "Okvsho/A place between us/01 Sara serenades the stars (Interlude).mp3", "missing": False}])
+    run(index.refresh())
+    assert lib_db.get("ok")["folder"] == "Okvsho/A place between us"
+    # Indexed before the fix, under the folder that's gone: looked up again though unchanged.
+    lib_db.upsert_many([{**lib_db.get("ok"), "folder": "Okvsho/A Place Between Us"}])
+    run(index.refresh())
+    assert lib_db.get("ok")["folder"] == "Okvsho/A place between us"
