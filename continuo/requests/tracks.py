@@ -44,7 +44,8 @@ def _safe(name: Optional[str], fallback: str) -> str:
 
 
 async def prepare(recording_id: str, album_rg: str) -> dict:
-    """Everything a track request needs from MusicBrainz, or LookupError."""
+    """Everything a track request needs from MusicBrainz: LookupError when it doesn't know the
+    song, musicbrainz.Unavailable when it couldn't be asked."""
     from ..upstream import musicbrainz
     rec = await musicbrainz.recording(recording_id)
     if not rec or not rec.get("title"):
@@ -274,9 +275,31 @@ async def _visible(row: dict) -> dict:
     return row
 
 
+async def _prepare_later(row: dict) -> dict:
+    """A song requested while MusicBrainz was too busy to look up: its details now, or later."""
+    from ..upstream import musicbrainz
+    try:
+        t = await prepare(row["mb_release_group_id"], row["album_release_group_id"])
+    except musicbrainz.Unavailable as e:
+        log.info("track %s: MusicBrainz still busy (%s); trying again later", row["id"], e)
+        return req_db.update(row["id"], next_attempt_at=_later(1))
+    except LookupError as e:
+        req_db.add_event(row["id"], "status", {"from": row["status"], "to": "error"})
+        row = req_db.update(row["id"], status="error", error=str(e))
+        _broadcast(row)
+        return row
+    row = req_db.update(row["id"], track=t, title=t["title"], artist=t["artist"], year=t.get("year"),
+                        artwork_url=t.get("imageUrl"), next_attempt_at=None)
+    req_db.add_event(row["id"], "track_details", {"album": t["albumTitle"]})
+    _broadcast(row)
+    return row
+
+
 async def step(row: dict) -> dict:
     """One move forward for one track request."""
     status = row["status"]
+    if not row.get("track"):
+        return await _prepare_later(row) if _due(row) else row
     if status in ("pending", "searching") and _due(row):
         return await _search(row)
     if status == "downloading":
@@ -323,6 +346,9 @@ def pipeline(row: dict) -> dict:
                      download={"client": "slskd", "sizeLeft": None, "timeLeft": None, "stalled": False,
                                "filesDone": 0, "filesTotal": 1},
                      row=row)
+    if not row.get("track"):
+        return build("requested", total=1, row=row,
+                     detail="Waiting for MusicBrainz (busy right now) to look the song up; it'll start by itself.")
     if row.get("still_looking"):
         return build("searching", total=1, row=row,
                      detail=f"Still looking — nobody on Soulseek has it yet ({row.get('search_cycles') or 0} searches). "

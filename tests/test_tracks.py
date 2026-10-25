@@ -181,3 +181,64 @@ def test_file_names_follow_the_library():
 def test_the_server_offers_song_requests(client, setup):
     make_user()
     assert "track_requests" in client.get("/v1/me", headers=bearer(login(client))).json()["capabilities"]
+
+
+def test_a_busy_musicbrainz_is_retried(fake, monkeypatch):
+    """MusicBrainz sheds load with 503s ("x-ratelimit-zone: global"); a lookup tries again."""
+    import httpx
+    calls = []
+
+    def answer(req):
+        calls.append(1)
+        if len(calls) < 3:
+            return httpx.Response(503, headers={"retry-after": "0"})
+        return httpx.Response(200, json={"title": "Drop the Guillotine", "length": 230000,
+                                         "artist-credit": [{"name": "Peach Pit", "artist": {"id": "pp"}}]})
+    monkeypatch.setattr(musicbrainz, "_RETRY_WAITS", (0.0, 0.0))
+    fake.on("GET", f"https://musicbrainz.org/ws/2/recording/{REC}", handler=answer)
+    rec = asyncio.run(musicbrainz.recording(REC))
+    assert rec["title"] == "Drop the Guillotine" and len(calls) == 3
+
+
+def test_an_unknown_song_is_not_found_but_a_busy_musicbrainz_is_not(fake, monkeypatch):
+    import httpx
+    monkeypatch.setattr(musicbrainz, "_RETRY_WAITS", (0.0, 0.0))
+    fake.on("GET", f"https://musicbrainz.org/ws/2/recording/{REC}", handler=lambda req: httpx.Response(404))
+    assert asyncio.run(musicbrainz.recording(REC)) is None
+    fake.on("GET", f"https://musicbrainz.org/ws/2/recording/{REC}", handler=lambda req: httpx.Response(503))
+    with pytest.raises(musicbrainz.Unavailable):
+        asyncio.run(musicbrainz.recording(REC))
+
+
+def test_a_song_requested_while_musicbrainz_is_busy_starts_once_it_answers(client, setup, monkeypatch):
+    make_user()
+
+    async def busy(mbid):
+        raise musicbrainz.Unavailable("503")
+    monkeypatch.setattr(musicbrainz, "recording", busy)
+    musicbrainz._search_cache[("peach pit", 25)] = (10**12, [{"musicBrainzRecordingId": REC, "title": "Drop the Guillotine",
+                                                              "artist": "Peach Pit", "album": {"year": 2017}}])
+    try:
+        out = _request(client)
+    finally:
+        musicbrainz._search_cache.clear()
+    assert out["title"] == "Drop the Guillotine", "the title from the search it was found in"
+    assert "MusicBrainz" in out["pipeline"]["detail"]
+    row = req_db.get(out["id"])
+    assert row["track"] is None and row["status"] == "pending"
+
+    asyncio.run(tracks.tick())                        # still busy: later
+    assert req_db.get(out["id"])["track"] is None and req_db.get(out["id"])["next_attempt_at"]
+    monkeypatch.setattr(musicbrainz, "recording", lambda mbid: _rec())   # MusicBrainz answers again
+    req_db.update(out["id"], next_attempt_at=None)
+
+    async def search(text, timeout_s=20.0):
+        return []
+    monkeypatch.setattr(soulseek, "search", search)
+    asyncio.run(tracks.tick())                        # MusicBrainz answers: details, then searching
+    row = req_db.get(out["id"])
+    assert row["track"]["albumTitle"] == "Being So Normal" and row["track"]["position"] == 2
+
+
+async def _rec():
+    return {"title": "Drop the Guillotine", "artist": "Peach Pit", "artistId": "pp", "durationMs": 230000}

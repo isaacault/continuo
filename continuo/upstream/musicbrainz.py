@@ -31,18 +31,48 @@ def _client() -> httpx.AsyncClient:
                                 "Accept": "application/json"})
 
 
-async def _get(path: str, params: dict) -> dict:
+class Unavailable(Exception):
+    """MusicBrainz didn't answer (it sheds load with 503s when busy), as opposed to not knowing."""
+
+
+# Waits before each retry of a 503/429/5xx; MusicBrainz's own Retry-After wins when it says more.
+_RETRY_WAITS = (1.0, 3.0)
+
+
+async def _get(path: str, params: dict, retries: int = len(_RETRY_WAITS)) -> dict:
+    """One paced MusicBrainz call. A busy MusicBrainz (503 "global" rate limit, 429, other 5xx)
+    is retried; httpx.HTTPStatusError when it still fails, or for a 404."""
     global _last_call
-    async with _pace_lock:
-        wait = _MIN_INTERVAL - (time.monotonic() - _last_call)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        try:
-            r = await _client().get(path, params={**params, "fmt": "json"})
-        finally:
-            _last_call = time.monotonic()
-    r.raise_for_status()
-    return r.json()
+    for attempt in range(retries + 1):
+        async with _pace_lock:
+            wait = _MIN_INTERVAL - (time.monotonic() - _last_call)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            try:
+                r = await _client().get(path, params={**params, "fmt": "json"})
+            finally:
+                _last_call = time.monotonic()
+        if (r.status_code == 429 or r.status_code >= 500) and attempt < retries:
+            after = r.headers.get("retry-after", "")
+            await asyncio.sleep(min(10.0, max(_RETRY_WAITS[min(attempt, len(_RETRY_WAITS) - 1)],
+                                              float(after) if after.replace(".", "", 1).isdigit() else 0)))
+            continue
+        r.raise_for_status()
+        return r.json()
+    raise AssertionError("unreachable")
+
+
+async def _lookup(path: str, params: dict) -> Optional[dict]:
+    """A lookup by MBID: None when MusicBrainz doesn't know it (404), Unavailable when it
+    couldn't be asked."""
+    try:
+        return await _get(path, params)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (400, 404):
+            return None
+        raise Unavailable(f"MusicBrainz answered {e.response.status_code}") from e
+    except (httpx.HTTPError, ValueError) as e:
+        raise Unavailable(str(e) or e.__class__.__name__) from e
 
 
 def pick_release_group(rec: dict) -> Optional[dict]:
@@ -66,12 +96,13 @@ def pick_release_group(rec: dict) -> Optional[dict]:
 
 async def search_tracks(term: str, limit: int = 25) -> list[dict]:
     """Recordings matching `term`, each pointing at the album that would fulfil a request.
-    Raises httpx.HTTPError on failure (the caller reports the catalogue as degraded)."""
+    Raises httpx.HTTPError on failure (the caller reports the catalogue as degraded). One quick
+    retry only: someone is waiting on the search."""
     key = (term.strip().casefold(), limit)
     hit = _search_cache.get(key)
     if hit and time.monotonic() - hit[0] < _SEARCH_TTL:
         return hit[1]
-    data = await _get("/recording", {"query": term, "limit": limit})
+    data = await _get("/recording", {"query": term, "limit": limit}, retries=1)
     out: list[dict] = []
     seen: set[str] = set()
     for rec in data.get("recordings", []):
@@ -104,6 +135,16 @@ async def search_tracks(term: str, limit: int = 25) -> list[dict]:
     return out
 
 
+def searched_recording(recording_mbid: str) -> Optional[dict]:
+    """A recording from a recent search (title, artist, album), without asking MusicBrainz:
+    what a song request shows while MusicBrainz is too busy to look it up."""
+    for _ts, hits in list(_search_cache.values()):
+        for h in hits:
+            if h.get("musicBrainzRecordingId") == recording_mbid:
+                return h
+    return None
+
+
 def _pick_release(releases: list[dict]) -> Optional[str]:
     if not releases:
         return None
@@ -111,9 +152,11 @@ def _pick_release(releases: list[dict]) -> Optional[str]:
                                          rel.get("date") or "9999")).get("id")
 
 
-async def album_tracks(release_group_mbid: str, release_mbid: Optional[str] = None) -> list[dict]:
+async def album_tracks(release_group_mbid: str, release_mbid: Optional[str] = None,
+                       strict: bool = False) -> list[dict]:
     """Tracklist of one canonical official release of the group (or the given release).
-    A release's tracklist never changes, so it's cached for the process life (bounded)."""
+    A release's tracklist never changes, so it's cached for the process life (bounded).
+    [] when MusicBrainz fails, or with [strict] raises Unavailable."""
     cache_key = release_mbid or release_group_mbid
     if cache_key in _tracklist_cache:
         return _tracklist_cache[cache_key]
@@ -124,7 +167,9 @@ async def album_tracks(release_group_mbid: str, release_mbid: Optional[str] = No
             if not release_mbid:
                 return []
         rel = await _get(f"/release/{release_mbid}", {"inc": "recordings"})
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, ValueError) as e:
+        if strict:
+            raise Unavailable(str(e) or e.__class__.__name__) from e
         return []
     out: list[dict] = []
     for medium in rel.get("media", []):
@@ -176,10 +221,9 @@ def _credit(credits: list[dict]) -> tuple[Optional[str], Optional[str]]:
 
 async def recording(recording_mbid: str) -> Optional[dict]:
     """{title, artist, artistId, durationMs} for a recording; None when MusicBrainz doesn't
-    know it (or didn't answer)."""
-    try:
-        r = await _get(f"/recording/{recording_mbid}", {"inc": "artist-credits"})
-    except (httpx.HTTPError, ValueError):
+    know it. Raises Unavailable when MusicBrainz couldn't be asked."""
+    r = await _lookup(f"/recording/{recording_mbid}", {"inc": "artist-credits"})
+    if r is None:
         return None
     artist, artist_id = _credit(r.get("artist-credit"))
     return {"title": r.get("title"), "artist": artist, "artistId": artist_id,
@@ -188,17 +232,17 @@ async def recording(recording_mbid: str) -> Optional[dict]:
 
 async def album_info(release_group_mbid: str) -> Optional[dict]:
     """What filing a song into this album needs: {title, artist, artistId, date, year,
-    releaseId, imageUrl, tracks} (tracks as album_tracks, from the same release)."""
-    try:
-        rg = await _get(f"/release-group/{release_group_mbid}", {"inc": "releases+artist-credits"})
-    except (httpx.HTTPError, ValueError):
+    releaseId, imageUrl, tracks} (tracks as album_tracks, from the same release). None when
+    MusicBrainz doesn't know the album; raises Unavailable when it couldn't be asked."""
+    rg = await _lookup(f"/release-group/{release_group_mbid}", {"inc": "releases+artist-credits"})
+    if rg is None:
         return None
     release_id = _pick_release(rg.get("releases", []))
     artist, artist_id = _credit(rg.get("artist-credit"))
     date = rg.get("first-release-date") or None
     return {"title": rg.get("title"), "artist": artist, "artistId": artist_id, "date": date,
             "year": _year(date), "releaseId": release_id, "imageUrl": coverart_url(release_group_mbid),
-            "tracks": await album_tracks(release_group_mbid, release_id) if release_id else []}
+            "tracks": await album_tracks(release_group_mbid, release_id, strict=True) if release_id else []}
 
 
 _artist_cache: dict[str, tuple[float, Optional[dict]]] = {}
