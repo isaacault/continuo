@@ -104,3 +104,27 @@ def test_cli_init_and_grant(media, capsys):
     assert cli.main(["libraries", "grant", "isaac"]) == 0
     assert cli.main(["libraries", "status"]) == 0
     assert "isaac" in capsys.readouterr().out
+
+
+def test_cli_init_with_wait_runs_in_one_event_loop(media, capsys, monkeypatch):
+    """Two asyncio.run calls left the second with the first loop's closed HTTP client."""
+    from continuo.upstream import navidrome
+    make_user("isaac", role="user")
+    loops = set()
+
+    async def scan_until(lib_id, expected, timeout_s=1800, poll_s=10):
+        import asyncio as aio
+        loops.add(id(aio.get_running_loop()))
+        return expected
+    real_init = accounts.init
+
+    async def init(user, everything):
+        import asyncio as aio
+        loops.add(id(aio.get_running_loop()))
+        return await real_init(user, everything)
+    monkeypatch.setattr(accounts, "scan_until", scan_until)
+    monkeypatch.setattr(accounts, "init", init)
+    monkeypatch.setattr(navidrome, "start_scan", lambda full=False: None)
+    assert cli.main(["libraries", "init", "isaac", "--all", "--wait"]) == 0
+    assert len(loops) == 1
+    assert "indexed 2/2" in capsys.readouterr().out

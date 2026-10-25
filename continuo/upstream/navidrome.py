@@ -218,9 +218,11 @@ def album_folder(paths: list[str]) -> Optional[str]:
 
 
 async def album_song_paths(album_id: str, limit: int = 1) -> list[str]:
+    """Paths of the album's songs that are on disk: Navidrome keeps a song whose file went (a
+    renamed folder) as missing until purged, and that path no longer leads anywhere."""
     data, _ = await native_get("song", {"album_id": album_id, "_start": 0, "_end": limit,
                                         "_sort": "album", "_order": "ASC"})
-    return [s.get("path") for s in data if s.get("path")]
+    return [s.get("path") for s in data if s.get("path") and not s.get("missing")]
 
 
 def relative_path(path: Optional[str], root: Optional[str] = None) -> str:
