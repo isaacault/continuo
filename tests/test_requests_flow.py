@@ -257,3 +257,49 @@ def test_search_report_from_torrent_cleanup(client):
                     json={"lidarrAlbumId": 412, "at": "2026-10-20T13:00:00+00:00", "rule": "10"})
     assert r.json()["requestId"] == row["id"]
     assert req_db.get(row["id"])["last_search_at"] == "2026-10-20T13:00:00+00:00"
+
+
+def test_a_known_artist_is_refreshed_when_the_album_isnt_listed_yet(monkeypatch):
+    """Nujabes' Luv(sic) Hexalogy: the metadata profile had just been opened to compilations, but
+    Lidarr's album list for the already-known artist was from before, so the request failed."""
+    lid = orchestrate.lidarr
+    calls, refreshed = [], {"done": False}
+    album = {"id": 664, "foreignAlbumId": RG, "releases": [{"foreignReleaseId": "rel-1"}], "statistics": {}}
+
+    async def lookup(rg):
+        return {"artist": {"foreignArtistId": "nujabes"}}
+
+    async def known(mbid):
+        return {"id": 55}
+
+    async def monitored(artist_id, on):
+        calls.append(("artist_monitored", artist_id))
+
+    async def wait(artist_id, rg, tries=20, delay=1.5):
+        return album if refreshed["done"] else None
+
+    async def refresh(artist_id):
+        refreshed["done"] = True
+        calls.append(("refresh", artist_id))
+
+    async def monitor(artist_id, album_id):
+        return True
+
+    for name, fn in {"lookup_album_by_id": lookup, "find_library_artist": known, "set_artist_monitored": monitored,
+                     "wait_for_album": wait, "refresh_artist": refresh, "monitor_album": monitor}.items():
+        monkeypatch.setattr(lid, name, fn)
+
+    async def rest(*a, **k):
+        return {"title": "Luv(sic) Hexalogy", "artist": {"artistName": "Nujabes"}, "releases": [], "images": []}
+    monkeypatch.setattr(lid, "get_album", rest)
+    monkeypatch.setattr(lid, "album_search", lambda ids: _none())
+    try:
+        out = run(orchestrate.request_album(RG))
+    except Exception as e:  # noqa: BLE001 — what comes after finding the album isn't this test's concern
+        out = e
+    assert ("refresh", 55) in calls, "the known artist is refreshed instead of failing"
+    assert not (isinstance(out, RuntimeError) and "compilation" in str(out))
+
+
+async def _none():
+    return None
