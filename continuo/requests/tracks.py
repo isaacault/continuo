@@ -121,8 +121,11 @@ async def _search(row: dict) -> dict:
     t = row["track"]
     fetch = row.get("fetch") or {}
     tried = {tuple(x) for x in fetch.get("tried") or []}
+    refused = set(fetch.get("refused") or [])
     responses = await soulseek.search(f"{t.get('artist') or ''} {t['title']}".strip())
-    for r in responses:   # copies that already failed don't count
+    # Copies that already failed don't count, nor anything from someone who rejected us.
+    responses = [r for r in responses if r.get("username") not in refused]
+    for r in responses:
         r["files"] = [f for f in r.get("files") or [] if (r.get("username"), f.get("filename")) not in tried]
     best = soulseek.best(responses, t.get("artist") or "", t["title"], t.get("durationMs"), variants=False)
     req_db.update(row["id"], last_search_at=now())
@@ -140,7 +143,7 @@ async def _search(row: dict) -> dict:
                                                    "format": best.extension, "bitRate": best.bit_rate})
     fetch = {"username": best.username, "filename": best.filename, "size": best.size,
              "extension": best.extension, "startedAt": now(), "percent": 0,
-             "tried": sorted(tried)}
+             "tried": sorted(tried), "refused": sorted(refused)}
     return _status(row, "downloading", fetch=fetch, last_source="soulseek", still_looking=False,
                    download_started_at=row.get("download_started_at") or now())
 
@@ -186,9 +189,12 @@ async def cancel(row: dict) -> None:
 async def _next_copy(row: dict, why: str) -> dict:
     fetch = row.get("fetch") or {}
     tried = [list(x) for x in fetch.get("tried") or []] + [[fetch.get("username"), fetch.get("filename")]]
+    refused = set(fetch.get("refused") or [])
+    if "Rejected" in why and fetch.get("username"):
+        refused.add(fetch["username"])   # they'll reject their other copies too (friends-only shares)
     req_db.add_event(row["id"], "track_copy_failed", {"user": fetch.get("username"), "why": why})
     await cancel(row)
-    return _status(row, "searching", fetch={"tried": tried}, next_attempt_at=now())
+    return _status(row, "searching", fetch={"tried": tried, "refused": sorted(refused)}, next_attempt_at=now())
 
 
 async def _follow(row: dict) -> dict:

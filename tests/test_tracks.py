@@ -242,3 +242,28 @@ def test_a_song_requested_while_musicbrainz_is_busy_starts_once_it_answers(clien
 
 async def _rec():
     return {"title": "Drop the Guillotine", "artist": "Peach Pit", "artistId": "pp", "durationMs": 230000}
+
+
+def test_someone_who_rejected_us_isnt_asked_again(client, setup, monkeypatch):
+    """stavriani rejected Visit Croatia, then was asked for their second copy and rejected again."""
+    make_user()
+    rid = _request(client)["id"]
+
+    async def search(text, timeout_s=20.0):
+        return [{**_hit("stavriani"), "files": _hit("stavriani")["files"] + _hit("stavriani", name="02 Drop the Guillotine (2).flac")["files"]},
+                {**_hit("jagodka"), "hasFreeUploadSlot": False}]
+
+    async def enqueue(c):
+        pass
+
+    async def transfer(c):
+        return {"state": "Completed, Rejected", "id": "t"} if c.username == "stavriani" else {"state": "Queued", "id": "t2"}
+    monkeypatch.setattr(soulseek, "search", search)
+    monkeypatch.setattr(soulseek, "enqueue", enqueue)
+    monkeypatch.setattr(soulseek, "transfer", transfer)
+    asyncio.run(tracks.tick())
+    assert req_db.get(rid)["fetch"]["username"] == "stavriani"
+    asyncio.run(tracks.tick())                         # rejected
+    assert req_db.get(rid)["fetch"]["refused"] == ["stavriani"]
+    asyncio.run(tracks.tick())
+    assert req_db.get(rid)["fetch"]["username"] == "jagodka", "not stavriani's other copy"
