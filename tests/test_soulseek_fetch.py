@@ -52,3 +52,60 @@ def test_download_lands_under_the_remote_parent_folder():
 
 def test_formats_follow_soularr_when_there_is_no_config():
     assert soulseek.formats() == [("flac", 0), ("mp3", 320)]
+
+
+SLSKD = "http://slskd.test/api/v0"
+
+
+def _slskd(fake, monkeypatch, complete_after: int):
+    """A slskd whose search reports complete only on the [complete_after]th look (or once
+    stopped), and has its responses only then."""
+    import dataclasses
+    import uuid
+
+    import httpx
+
+    from continuo import config
+    monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, slskd_url="http://slskd.test",
+                                                                slskd_api_key="k"))
+    monkeypatch.setattr(soulseek, "POLL_S", 0.0)
+    monkeypatch.setattr(uuid, "uuid4", lambda: "sid")
+    seen = {"looks": 0, "calls": [], "stopped": False}
+
+    def done():
+        return seen["looks"] >= complete_after or seen["stopped"]
+
+    def handle(req: httpx.Request):
+        seen["calls"].append(req.method)
+        if req.method == "PUT":
+            seen["stopped"] = True
+        if req.method == "GET" and req.url.path.endswith("/responses"):
+            return httpx.Response(200, json=RESPONSES if done() else [])
+        if req.method == "GET":
+            seen["looks"] += 1
+            return httpx.Response(200, json={"isComplete": done()})
+        return httpx.Response(200, json={})
+    fake.on("POST", f"{SLSKD}/searches", handler=handle)
+    for method in ("GET", "PUT", "DELETE"):
+        fake.on(method, f"{SLSKD}/searches/sid", handler=handle)
+    fake.on("GET", f"{SLSKD}/searches/sid/responses", handler=handle)
+    return seen
+
+
+def test_a_long_search_is_waited_for_not_deleted_mid_flight(fake, monkeypatch):
+    """slskd ends a search after 15 s without a new response, so a popular one runs ~45-50 s; the
+    old 30 s wait deleted it mid-flight: no responses, and a database error in slskd."""
+    import asyncio
+    seen = _slskd(fake, monkeypatch, complete_after=40)   # the old 30 s wait looked ~30 times
+    out = asyncio.run(soulseek.search("Alabaster dePlume Visit Croatia"))
+    assert len(out) == len(RESPONSES)
+    assert "PUT" not in seen["calls"] and seen["calls"][-1] == "DELETE", "deleted only after it finished"
+
+
+def test_a_search_past_the_cap_is_stopped_and_keeps_its_results(fake, monkeypatch):
+    import asyncio
+    seen = _slskd(fake, monkeypatch, complete_after=10**6)
+    monkeypatch.setattr(soulseek, "MAX_SEARCH_S", 0.0)
+    out = asyncio.run(soulseek.search("anything"))
+    assert seen["calls"].index("PUT") < seen["calls"].index("DELETE"), "stopped, then cleaned up"
+    assert out == RESPONSES

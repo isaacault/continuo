@@ -184,23 +184,37 @@ def best(responses: list[dict], artist: str, title: str, duration_ms: Optional[i
     return min(scored, key=lambda p: p[0])[1] if scored else None
 
 
-async def search(text: str, timeout_s: float = 20.0) -> list[dict]:
+# slskd ends a search after [quiet_s] without a new response, so a popular one runs well past
+# it (45-50 s seen). Wait for it to finish, up to MAX_SEARCH_S; past that, stop it (its results
+# stay) rather than delete it mid-flight, which loses every response and errors in slskd.
+MAX_SEARCH_S = 120.0
+POLL_S = 2.0
+
+
+async def search(text: str, quiet_s: float = 15.0) -> list[dict]:
     """slskd search responses for [text]; [] when slskd is off or failed. The search record is
     deleted afterwards (they pile up otherwise)."""
     if not slskd.enabled():
         return []
     c = slskd._client()
     sid = str(uuid.uuid4())
+    loop = asyncio.get_running_loop()
     try:
-        r = await c.post("/searches", json={"id": sid, "searchText": text, "searchTimeout": int(timeout_s * 1000)})
+        r = await c.post("/searches", json={"id": sid, "searchText": text, "searchTimeout": int(quiet_s * 1000)})
         r.raise_for_status()
-        deadline = asyncio.get_running_loop().time() + timeout_s + 10
-        while asyncio.get_running_loop().time() < deadline:
+        deadline = loop.time() + MAX_SEARCH_S
+        stopped = False
+        while True:
             s = await c.get(f"/searches/{sid}")
             s.raise_for_status()
             if s.json().get("isComplete"):
                 break
-            await asyncio.sleep(1.0)
+            if loop.time() >= deadline:
+                if stopped:
+                    break                   # stopped and still not final: take what's there
+                await c.put(f"/searches/{sid}")
+                stopped, deadline = True, loop.time() + 10
+            await asyncio.sleep(POLL_S)
         r = await c.get(f"/searches/{sid}/responses")
         r.raise_for_status()
         return r.json() or []
