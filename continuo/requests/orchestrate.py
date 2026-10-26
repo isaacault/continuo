@@ -44,6 +44,12 @@ async def request_album(foreign_album_id: str, request_id: int | None = None) ->
         event("artist_added", {"lidarrArtistId": artist_id, "monitorNewItems": "none"})
 
     album = await lidarr.wait_for_album(artist_id, foreign_album_id)
+    if not album and existing:
+        # A known artist's album list is from Lidarr's last refresh: one the metadata profile has
+        # only just allowed (an EP, a compilation) isn't on it until Lidarr re-reads the artist.
+        event("artist_refreshed", {"lidarrArtistId": artist_id})
+        await lidarr.refresh_artist(artist_id)
+        album = await lidarr.wait_for_album(artist_id, foreign_album_id, tries=5)
     if not album:
         raise RuntimeError(_COMPILATION_HINT)
     album_id = album["id"]
