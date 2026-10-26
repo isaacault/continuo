@@ -257,6 +257,19 @@ async def _file(row: dict, path: str) -> dict:
     return row
 
 
+async def _file_local(row: dict, local: str) -> dict:
+    """A kept Play now song (#12): its cached copy is filed like a download, the cache keeping its
+    own until evicted. When the copy's gone (evicted meanwhile) it's searched for like any song."""
+    if not os.path.isfile(local):
+        req_db.add_event(row["id"], "keep_copy_gone", {"path": local})
+        return req_db.update(row["id"], fetch={})
+    tmp = f"{local}.keep"
+    shutil.copy2(local, tmp)
+    req_db.update(row["id"], fetch={"extension": (row.get("fetch") or {}).get("extension")},
+                  last_source="soulseek", download_started_at=row.get("download_started_at") or now())
+    return await _file(req_db.get(row["id"]), tmp)
+
+
 async def _attention(row: dict, reason: str, detail: str) -> None:
     from ..workers import scan
     await scan.attention(row, reason, detail)
@@ -306,6 +319,9 @@ async def step(row: dict) -> dict:
     status = row["status"]
     if not row.get("track"):
         return await _prepare_later(row) if _due(row) else row
+    local = (row.get("fetch") or {}).get("local")
+    if status in ("pending", "searching") and local:
+        return await _file_local(row, local)
     if status in ("pending", "searching") and _due(row):
         return await _search(row)
     if status == "downloading":
