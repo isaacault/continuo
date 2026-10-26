@@ -191,8 +191,9 @@ MAX_SEARCH_S = 120.0
 POLL_S = 2.0
 
 
-async def search(text: str, quiet_s: float = 15.0) -> list[dict]:
-    """slskd search responses for [text]; [] when slskd is off or failed. The search record is
+async def search(text: str, quiet_s: float = 15.0, max_s: float | None = None) -> list[dict]:
+    """slskd search responses for [text]; [] when slskd is off or failed. [max_s] caps the wait
+    (default MAX_SEARCH_S): Play now takes what it has after a few seconds. The search record is
     deleted afterwards (they pile up otherwise)."""
     if not slskd.enabled():
         return []
@@ -202,7 +203,7 @@ async def search(text: str, quiet_s: float = 15.0) -> list[dict]:
     try:
         r = await c.post("/searches", json={"id": sid, "searchText": text, "searchTimeout": int(quiet_s * 1000)})
         r.raise_for_status()
-        deadline = loop.time() + MAX_SEARCH_S
+        deadline = loop.time() + (MAX_SEARCH_S if max_s is None else max_s)
         stopped = False
         while True:
             s = await c.get(f"/searches/{sid}")

@@ -99,7 +99,7 @@ def capabilities(user: CurrentUser) -> list[str]:
         out = out + ["own_library"]
     # Single songs (#24) come from Soulseek straight into the music folder.
     from ..upstream import slskd
-    return out + ["track_requests"] if slskd.enabled() else out
+    return out + ["track_requests", "play_now"] if slskd.enabled() else out
 
 
 @router.get("/me/library")

@@ -148,6 +148,9 @@ class Settings:
     # slskd's downloads folder as continuo sees it (to clear a losing racer's files; "" = leave
     # them) and as Lidarr sees it (where Lidarr imports a winning racer from).
     slskd_downloads_dir: str = ""
+    # Where slskd writes a file while it downloads (Play now plays from it); default: the
+    # downloads folder's sibling "<name>-incomplete", as the homelab mounts them.
+    slskd_incomplete_dir: str = ""
     lidarr_soulseek_path: str = "/data/downloads/soulseek"
     heartbeat_seconds: int = 60
     loop_stale_seconds: int = 300
@@ -274,6 +277,8 @@ def load(env: dict | None = None) -> Settings:
         race_slow_min=_int(e, "RACE_SLOW_MIN", 60),
         race_idle_min=_int(e, "RACE_IDLE_MIN", 10),
         slskd_downloads_dir=_url(e, "SLSKD_DOWNLOADS_DIR"),
+        slskd_incomplete_dir=_url(e, "SLSKD_INCOMPLETE_DIR") or (
+            _url(e, "SLSKD_DOWNLOADS_DIR").rstrip("/") + "-incomplete" if _url(e, "SLSKD_DOWNLOADS_DIR") else ""),
         lidarr_soulseek_path=_url(e, "LIDARR_SOULSEEK_PATH", "/data/downloads/soulseek"),
         heartbeat_seconds=_int(e, "HEARTBEAT_SECONDS", 60),
         loop_stale_seconds=_int(e, "LOOP_STALE_SECONDS", 300),
