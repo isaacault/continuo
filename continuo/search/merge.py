@@ -456,7 +456,8 @@ async def unified_search(q: str, types: tuple[str, ...], limit: int,
         results += merge_artists(library["artist"], cat_artists, limit)
     if "track" in want:
         results += merge_tracks(library["song"], cat_tracks, index, requests, limit, req_db.active_tracks())
-    return {"query": q, "sources": sources, "results": results, "best": lead(q, results, ranked_cat.get("best"))}
+    return {"query": q, "sources": sources, "results": results, "ranked": bool(ranked_cat),
+            "best": lead(q, results, ranked_cat.get("best"))}
 
 
 # ---- quick search: the top few, fast, while typing ----------------------------------------------
@@ -578,7 +579,8 @@ async def _quick_cached(q: str, limit: int) -> dict:
     hit = _quick_cache.get(key)
     if hit is not None:
         return hit
-    value = await _ranked(q, limit) or await _quick_catalog(q, limit)
+    ranked_cat = await _ranked(q, limit)
+    value = dict(ranked_cat, ranked=True) if ranked_cat is not None else await _quick_catalog(q, limit)
     if value.get("complete", True):
         _quick_cache.put(key, value)
     return value
@@ -608,4 +610,4 @@ async def quick_search(q: str, navidrome_user: str, user_id: Optional[int] = Non
                + merge_artists(library["artist"], catalog["artists"], limit)
                + merge_tracks(library["song"], catalog["tracks"], index, requests, limit, req_db.active_tracks()))
     return {"query": q, "sources": sources, "results": results, "partial": True,
-            "best": lead(q, results, catalog.get("best"))}
+            "ranked": bool(catalog.get("ranked")), "best": lead(q, results, catalog.get("best"))}
