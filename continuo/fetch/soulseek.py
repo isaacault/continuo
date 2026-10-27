@@ -3,8 +3,10 @@ follow it. Lidarr only deals in whole albums, so single songs come straight from
 
 Policies: `library` (a song added to the library) prefers formats in Soularr's own order
 (`allowed_filetypes`, e.g. "flac,mp3 320"), then a free upload slot and a short queue;
-`fastest` (play-now and the queue look-ahead, later) puts a free slot, a short queue and upload
-speed first, among the same acceptable formats."""
+`fastest` (Play now, which isn't kept in the library unless asked) takes any decent copy, lossless
+or lossy at FAST_MIN_KBPS and up, whatever the library's formats, and puts the one that arrives
+soonest first: a free slot, a short queue, then the least time to download (size over the peer's
+upload speed), so a 320 kbps MP3 (8 MB) beats a 90 MB FLAC from the same kind of peer."""
 import asyncio
 import logging
 import re
@@ -24,6 +26,9 @@ _DEFAULT_FORMATS = [("flac", 0), ("mp3", 320)]
 # Versions that aren't the song unless the title says so.
 _VARIANTS = re.compile(r"\b(live|remix|instrumental|karaoke|acapella|a cappella|cover|demo|edit|sped up|slowed)\b")
 _DURATION_SLACK_S = 8
+# Play now: lossy copies below this aren't worth hearing; lossless always counts.
+FAST_MIN_KBPS = 192
+_LOSSLESS = {"flac", "wav", "aiff", "aif", "wv", "ape", "alac"}
 
 
 @dataclass(frozen=True)
@@ -75,6 +80,22 @@ def _format_rank(c: Candidate, allowed: list[tuple[str, int]]) -> Optional[int]:
     return None
 
 
+def _decent(c: Candidate) -> bool:
+    """Worth hearing: lossless, or lossy at FAST_MIN_KBPS and up (by its bit rate, else its size
+    over its length; a copy saying neither counts)."""
+    if c.extension in _LOSSLESS:
+        return True
+    if c.extension not in AUDIO:
+        return False
+    kbps = c.bit_rate or (c.size * 8 / 1000 / c.length_s if c.size and c.length_s else None)
+    return kbps is None or kbps >= FAST_MIN_KBPS
+
+
+def download_s(c: Candidate) -> float:
+    """Seconds this copy should take to arrive whole, from its size and the peer's upload speed."""
+    return c.size / max(c.upload_speed, 1) if c.size else float("inf")
+
+
 def score(c: Candidate, artist: str, title: str, duration_ms: Optional[int], policy: str,
           allowed: list[tuple[str, int]]) -> Optional[tuple]:
     """Sort key for a copy (lower is better), or None when it isn't the song."""
@@ -82,7 +103,10 @@ def score(c: Candidate, artist: str, title: str, duration_ms: Optional[int], pol
     want, by = normalise(title), normalise(artist)
     if not want or want not in name or (by and by not in path):
         return None
-    rank = _format_rank(c, allowed)
+    if policy == FASTEST:
+        rank = 0 if _decent(c) else None
+    else:
+        rank = _format_rank(c, allowed)
     if rank is None:
         return None
     if duration_ms and c.length_s and abs(c.length_s - duration_ms / 1000) > _DURATION_SLACK_S:
@@ -90,7 +114,7 @@ def score(c: Candidate, artist: str, title: str, duration_ms: Optional[int], pol
     title_words = set(_VARIANTS.findall(title.lower()))
     variant = any(v not in title_words for v in _VARIANTS.findall(c.basename.lower()))
     if policy == FASTEST:
-        return (variant, not c.free_slot, c.queue_length, -c.upload_speed, rank)
+        return (variant, not c.free_slot, c.queue_length, download_s(c))
     return (variant, rank, not c.free_slot, c.queue_length, -c.upload_speed)
 
 
