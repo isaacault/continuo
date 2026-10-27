@@ -28,6 +28,8 @@ log = logging.getLogger("continuo")
 
 _fresh_cache = TTLCache(6 * 3600.0, max_items=2)
 _page_cache = TTLCache(3 * 3600.0, max_items=64)
+_artist_art_cache = TTLCache(24 * 3600.0, max_items=512)
+_WARM_AT_ONCE = 4
 _FRESH_DAYS = 90
 _SEEDS = 3
 _SIMILAR = 6
@@ -140,6 +142,58 @@ async def _for_you(albums: list[dict], limit: int) -> list[dict]:
     return (firsts + seconds)[:limit]
 
 
+async def _artist_picture(name: str) -> Optional[str]:
+    """The artist's picture from Lidarr (fanart.tv), for a release with no cover yet; cached a day."""
+    async def look() -> str:
+        try:
+            hits = await lidarr.search_artists(name)
+        except (httpx.HTTPError, ValueError):
+            return ""
+        want = normalise(name)
+        return next((h.get("imageUrl") or "" for h in hits if normalise(h.get("name")) == want), "")
+    return await cached(_artist_art_cache, normalise(name), look) or None
+
+
+async def _with_covers(albums: list[dict]) -> list[dict]:
+    """Brand-new releases often have no cover anywhere yet (Cover Art Archive, Lidarr, Deezer
+    checked): those show their artist's picture instead of a blank."""
+    async def one(a: dict) -> dict:
+        if a.get("imageUrl"):
+            return a
+        lead = _CREDIT_SPLIT.split(a.get("artist") or "")[0].strip()
+        return {**a, "imageUrl": await _artist_picture(lead)} if lead else a
+    return list(await asyncio.gather(*(one(a) for a in albums)))
+
+
+async def _warm(sources: list[str]) -> None:
+    """Fetch the page's pictures into the artwork cache before the phone asks for them: a cold
+    Cover Art Archive image takes seconds (redirects to archive.org), a cached one 0.07 s."""
+    from .. import artwork
+    gate = asyncio.Semaphore(_WARM_AT_ONCE)
+
+    async def one(src: str) -> None:
+        try:
+            url = artwork.sized(artwork.check_source(src), None)
+        except artwork.Refused:
+            return
+        key = artwork.cache_key(url)
+        if artwork.cache_get(key) is not None or artwork.known_missing(key):
+            return
+        async with gate:
+            try:
+                data, _kind = await artwork.fetch_image(url)
+            except artwork.NotFound:
+                artwork.remember_missing(key)
+                return
+            except (artwork.Refused, artwork.Unusable, httpx.HTTPError):
+                return
+            artwork.cache_put(key, data)
+    await asyncio.gather(*(one(s) for s in dict.fromkeys(sources) if s))
+
+
+_warming: set[asyncio.Task] = set()
+
+
 async def _build(user_id: Optional[int], limit: int) -> dict:
     albums = _your_albums(user_id)
     fresh_t = cached(_fresh_cache, "fresh", _fresh_releases)
@@ -156,7 +210,10 @@ async def _build(user_id: Optional[int], limit: int) -> dict:
         songs = []
     index = merge._LibraryIndex(lib_db.all_albums(), user_id)
     requests = req_db.active_by_release_group()
-    cat_new = new_from(albums, fresh, limit)
+    cat_new = await _with_covers(new_from(albums, fresh, limit))
+    task = asyncio.get_running_loop().create_task(_warm([a.get("imageUrl") for a in cat_new] + [t.get("imageUrl") for t in songs]))
+    _warming.add(task)
+    task.add_done_callback(_warming.discard)
     # Already in the library under another release group (a reissue matched by name): left out.
     new = [h for h in merge.merge_albums([], cat_new, index, requests, limit)
            if (h.get("availability") or {}).get("state") != "in_library"]

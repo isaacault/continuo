@@ -52,3 +52,14 @@ def test_for_you_is_similar_artists_you_don_t_have_and_their_top_songs(monkeypat
     monkeypatch.setattr(listenbrainz, "top_recordings", top)
     out = asyncio.run(discover._for_you(YOURS, limit=10))
     assert [t["title"] for t in out] == ["Hit 0", "Hit 1"], "no repeats, no remixes, two per artist, none of yours"
+
+
+def test_a_release_without_a_cover_shows_its_artist_s_picture(monkeypatch):
+    async def search_artists(name):
+        return [{"name": "Juice WRLD", "musicBrainzArtistId": "jw", "imageUrl": "https://images.lidarr.audio/jw.jpg"}]
+    monkeypatch.setattr(lidarr, "search_artists", search_artists)
+    discover._artist_art_cache.clear()
+    albums = discover.new_from([{"artist": "Juice WRLD", "mbz_release_group_id": None}],
+                               [dict(FRESH[0], caa_release_mbid=None)], limit=5)
+    out = asyncio.run(discover._with_covers(albums))
+    assert out[0]["imageUrl"] == "https://images.lidarr.audio/jw.jpg"
