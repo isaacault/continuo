@@ -36,6 +36,24 @@ def test_health_ok_then_degraded_then_unhealthy(client, fake):
     assert r.status_code == 503 and r.json()["status"] == "unhealthy"
 
 
+def test_health_says_when_slskd_is_up_but_off_the_soulseek_network(client, fake, monkeypatch):
+    import dataclasses
+
+    from continuo import config
+    from continuo.api import health
+    monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, slskd_url="http://slskd.test", slskd_api_key="k"))
+    _upstreams_ok(fake)
+    fake.on("GET", "http://slskd.test/api/v0/application", {"version": "0.22"})
+    fake.on("GET", "http://slskd.test/api/v0/server", {"state": "Connected, LoggedIn", "isLoggedIn": True})
+    health._upstream_cache = (0.0, {})
+    registry.tick("status")
+    assert client.get("/v1/health").json()["upstream"]["soulseek"] == "ok"
+    fake.on("GET", "http://slskd.test/api/v0/server", {"state": "Disconnecting", "isLoggedIn": False})
+    health._upstream_cache = (0.0, {})
+    body = client.get("/v1/health").json()
+    assert body["upstream"]["slskd"] == "ok" and body["upstream"]["soulseek"] == "down" and body["status"] == "degraded"
+
+
 def test_sse_events_reach_owner_and_admins_only(fake):
     async def go():
         owner = events.subscribe(2, False)

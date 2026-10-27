@@ -162,6 +162,16 @@ async def delete_searches_for(artist: Optional[str], album: Optional[str] = None
     return deleted
 
 
+async def logged_in() -> bool:
+    """Whether slskd is connected and logged in to the Soulseek server: its web API can answer
+    while it isn't (lost the connection, stuck reconnecting), and then nothing can be searched."""
+    try:
+        r = await _client().get("/server", timeout=5.0)
+        return r.status_code == 200 and bool(r.json().get("isLoggedIn"))
+    except (httpx.HTTPError, ValueError):
+        return False
+
+
 async def ping() -> bool:
     try:
         r = await _client().get("/application", timeout=5.0)
