@@ -26,6 +26,9 @@ def _hit(user, free=True, speed=5_000_000):
             "files": [{"filename": REMOTE, "size": len(AUDIO), "extension": "flac", "length": 231}]}
 
 
+ORIGINAL_SEARCH = soulseek.search
+
+
 @pytest.fixture
 def world(tmp_path, monkeypatch, fake):
     media = tmp_path / "media"
@@ -213,6 +216,29 @@ def test_keeping_a_copy_below_the_library_s_formats_fetches_a_better_one(client,
     assert not (req.get("fetch") or {}).get("local"), "searched for like any song request, in the library's formats"
     assert playnow.library_quality({"extension": "flac", "size": 1, "duration_ms": 1})
     assert playnow.library_quality({"extension": "mp3", "size": 230 * 320 * 1000 // 8, "duration_ms": 230_000})
+
+
+def test_soulseek_offline_says_so_rather_than_nobody_has_it(client, world, fake, monkeypatch):
+    isaac = make_user()
+    monkeypatch.setattr(soulseek, "search", ORIGINAL_SEARCH)
+    fake.on("POST", "http://slskd.test/api/v0/searches", status=409,
+            json_body="The server connection must be connected and logged in to perform a search (currently: Disconnecting)")
+    row = _run(isaac["id"])
+    assert row["status"] == "failed" and "offline" in row["error"]
+
+
+def test_a_song_request_waits_out_soulseek_being_offline(monkeypatch):
+    async def offline(texts, **_kw):
+        raise soulseek.Offline("currently: Disconnecting")
+    monkeypatch.setattr(soulseek, "search_any", offline)
+    seen = {}
+
+    def status(row, s, **fields):
+        seen.update(fields, status=s)
+        return row
+    monkeypatch.setattr(tracks, "_status", status)
+    asyncio.run(tracks._search({"id": 1, "track": {"title": "Loaded", "artist": "Primal Scream"}, "search_cycles": 4}))
+    assert seen["status"] == "searching" and "search_cycles" not in seen, "an outage isn't a search that found nothing"
 
 
 def test_audio_waits_for_bytes_still_downloading(client, world):

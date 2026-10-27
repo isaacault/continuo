@@ -74,7 +74,11 @@ async def start(row: dict) -> Optional[dict]:
     except httpx.HTTPError:
         tracks = []
     titles = [t.get("title") or "" for t in tracks]
-    responses = await soulseek.search_any(soulseek.queries(row.get("artist") or "", row.get("title") or ""))
+    try:
+        responses = await soulseek.search_any(soulseek.queries(row.get("artist") or "", row.get("title") or ""))
+    except soulseek.Offline:
+        log.info("race %s: Soulseek is offline, nothing raced for now", row["id"])
+        return None     # not recorded as failed: a later tick tries again
     best = soulseek.best_album(responses, row.get("title") or "", titles)
     if best is None:
         races_db.add(row["id"], "soulseek", state="failed", detail="No complete copy on Soulseek")
