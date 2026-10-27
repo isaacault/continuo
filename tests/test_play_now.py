@@ -213,3 +213,71 @@ def test_audio_waits_for_bytes_still_downloading(client, world):
     out = client.get(f"/v1/play-now/{row['id']}/audio", headers=bearer(login(client)))
     assert out.status_code == 200 and out.headers["content-length"] == str(len(AUDIO))
     assert out.content == AUDIO, "the second half arrived while the request was waiting"
+
+
+def _queue_three(user_id, order=None):
+    """Three songs queued (polyphony#164); returns their statuses before any fetch has run."""
+    async def go():
+        ids = [playnow.start(user_id, f"{REC[:-1]}{i}", RG, f"Song {i}", "Peach Pit", None, queued=True)["id"]
+               for i in range(3)]
+        first = {sid: streams_db.get(sid)["status"] for sid in ids}
+        for t in list(playnow._tasks):
+            t.cancel()
+        return ids, first
+    return asyncio.run(go())
+
+
+def test_queued_songs_are_fetched_two_at_a_time_soonest_first(world):
+    isaac = make_user()
+    ids, status = _queue_three(isaac["id"])
+    assert [status[i] for i in ids] == ["searching", "searching", "queued"]
+
+
+def test_the_app_s_queue_order_decides_what_s_fetched_next(world):
+    isaac = make_user()
+    ids = [streams_db.create(f"s{i}", isaac["id"], f"rec-{i}", RG, f"Song {i}", "A", None, status="queued")["id"]
+           for i in range(3)]
+
+    async def go():
+        playnow.prioritise(isaac["id"], ["s2", "s0"])          # s2 plays first now
+        out = {sid: streams_db.get(sid)["status"] for sid in ids}
+        for t in list(playnow._tasks):
+            t.cancel()
+        return out
+    out = asyncio.run(go())
+    assert out == {"s2": "searching", "s0": "searching", "s1": "queued"}
+
+
+def test_a_song_played_now_starts_whatever_is_queued(world):
+    isaac = make_user()
+
+    async def go():
+        for i in range(3):
+            playnow.start(isaac["id"], f"rec-q{i}", RG, f"Q{i}", "A", None, queued=True)
+        now = playnow.start(isaac["id"], "rec-now", RG, "Now", "A", None)
+        status = streams_db.get(now["id"])["status"]
+        for t in list(playnow._tasks):
+            t.cancel()
+        return status
+    assert asyncio.run(go()) == "searching"
+
+
+def test_a_restart_puts_cut_off_fetches_back_in_the_queue(world):
+    isaac = make_user()
+    streams_db.create("cut", isaac["id"], "rec-cut", RG, "Cut off", "A", None, status="downloading")
+
+    async def go():
+        n = playnow.requeue_interrupted()
+        status = streams_db.get("cut")["status"]
+        for t in list(playnow._tasks):
+            t.cancel()
+        return n, status
+    n, status = asyncio.run(go())
+    assert n == 1 and status == "searching", "requeued, then started again"
+
+
+def test_the_priority_route(client, world):
+    isaac = make_user()
+    streams_db.create("p0", isaac["id"], "rec-p0", RG, "P0", "A", None, status="queued")
+    out = client.post("/v1/play-now/priority", headers=bearer(login(client)), json={"ids": ["p0"]})
+    assert out.status_code == 200 and out.json()["updated"] == 1

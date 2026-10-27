@@ -26,6 +26,9 @@ log = logging.getLogger("continuo")
 START_BYTES = 256 * 1024
 START_TIMEOUT_S = 25.0
 MAX_COPIES = 3
+# Queued songs (polyphony#164) are fetched this many at a time per account, needed soonest first;
+# a song tapped to play now starts at once whatever is running.
+MAX_FETCHING = 2
 SEARCH_QUIET_S = 4.0
 SEARCH_MAX_S = 15.0
 POLL_S = 1.0
@@ -34,17 +37,56 @@ _tasks: set[asyncio.Task] = set()
 
 
 def start(user_id: Optional[int], recording_id: str, album_rg: Optional[str], title: str, artist: str,
-          duration_ms: Optional[int]) -> dict:
-    """A stream for this song: an earlier one still in the cache plays at once; else a new fetch."""
+          duration_ms: Optional[int], queued: bool = False) -> dict:
+    """A stream for this song: an earlier one still in the cache plays at once; else a fetch, at
+    once (played now) or [queued] behind the account's other queued songs (polyphony#164)."""
     done = streams_db.ready_for(recording_id)
     if done and audio_path(done):
         cache_db.touch(done["cache_item_id"])
         return done
-    row = streams_db.create(str(uuid.uuid4()), user_id, recording_id, album_rg, title, artist, duration_ms)
+    if queued:
+        row = streams_db.create(str(uuid.uuid4()), user_id, recording_id, album_rg, title, artist, duration_ms,
+                                status="queued")
+        kick(user_id)
+        return streams_db.get(row["id"])
+    row = streams_db.create(str(uuid.uuid4()), user_id, recording_id, album_rg, title, artist, duration_ms,
+                            priority=-1)
+    _launch(row)
+    return row
+
+
+def _launch(row: dict) -> None:
     task = asyncio.get_running_loop().create_task(_run(row["id"]))
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
-    return row
+    task.add_done_callback(lambda _t, uid=row["user_id"]: kick(uid))
+
+
+def kick(user_id: Optional[int]) -> None:
+    """Start the account's queued fetches, soonest needed first, up to MAX_FETCHING at a time."""
+    while streams_db.fetching_count(user_id) < MAX_FETCHING:
+        row = streams_db.next_queued(user_id)
+        if row is None:
+            return
+        _launch(streams_db.update(row["id"], status="searching"))
+
+
+def prioritise(user_id: Optional[int], ordered_ids: list[str]) -> int:
+    """The app's queue order of its Play now songs: the queued ones are fetched in that order."""
+    n = streams_db.set_priorities(user_id, ordered_ids)
+    kick(user_id)
+    return n
+
+
+def requeue_interrupted() -> int:
+    """At start: a fetch a restart cut off goes back in its account's queue, and queues resume."""
+    from ..db.conn import connect
+    with connect() as c:
+        n = c.execute(f"UPDATE streams SET status='queued' WHERE status IN ({','.join('?' * len(streams_db.FETCHING))})",
+                      streams_db.FETCHING).rowcount
+    for uid in streams_db.queued_user_ids():
+        kick(uid)
+    return n
 
 
 def view(row: dict) -> dict:

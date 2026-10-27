@@ -2,7 +2,8 @@
 from .conn import connect, dumps, loads, now, row
 
 _UPDATABLE = {"status", "username", "filename", "size", "extension", "tried", "cache_item_id", "error",
-              "title", "artist", "duration_ms"}
+              "title", "artist", "duration_ms", "priority"}
+FETCHING = ("searching", "downloading", "streaming")
 
 
 def _decode(r: dict | None) -> dict | None:
@@ -12,13 +13,42 @@ def _decode(r: dict | None) -> dict | None:
 
 
 def create(stream_id: str, user_id: int | None, recording_id: str, album_rg: str | None,
-           title: str | None, artist: str | None, duration_ms: int | None) -> dict:
+           title: str | None, artist: str | None, duration_ms: int | None,
+           status: str = "searching", priority: int = 1_000_000) -> dict:
     ts = now()
     with connect() as c:
         c.execute("INSERT INTO streams (id, user_id, recording_id, album_rg, title, artist, duration_ms, status, "
-                  "tried, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'searching', '{}', ?, ?)",
-                  (stream_id, user_id, recording_id, album_rg, title, artist, duration_ms, ts, ts))
+                  "tried, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)",
+                  (stream_id, user_id, recording_id, album_rg, title, artist, duration_ms, status, priority, ts, ts))
     return get(stream_id)
+
+
+def fetching_count(user_id: int | None) -> int:
+    with connect() as c:
+        return c.execute(f"SELECT COUNT(*) FROM streams WHERE user_id IS ? AND status IN ({','.join('?' * len(FETCHING))})",
+                         (user_id, *FETCHING)).fetchone()[0]
+
+
+def next_queued(user_id: int | None) -> dict | None:
+    """The account's queued stream needed soonest."""
+    with connect() as c:
+        return _decode(row(c.execute("SELECT * FROM streams WHERE user_id IS ? AND status='queued' "
+                                     "ORDER BY priority, created_at LIMIT 1", (user_id,)).fetchone()))
+
+
+def set_priorities(user_id: int | None, ordered_ids: list[str]) -> int:
+    """The account's queue order: listed streams take their position; others go after them."""
+    with connect() as c:
+        c.execute("UPDATE streams SET priority=1000000 WHERE user_id IS ? AND status='queued'", (user_id,))
+        n = 0
+        for i, sid in enumerate(ordered_ids):
+            n += c.execute("UPDATE streams SET priority=? WHERE id=? AND user_id IS ?", (i, sid, user_id)).rowcount
+    return n
+
+
+def queued_user_ids() -> set:
+    with connect() as c:
+        return {r[0] for r in c.execute("SELECT DISTINCT user_id FROM streams WHERE status='queued'")}
 
 
 def get(stream_id: str) -> dict | None:

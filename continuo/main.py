@@ -84,6 +84,8 @@ async def lifespan(_app: FastAPI):
     if not getattr(_app.state, "disable_workers", False):
         orchestrate.requeue_stranded()
         tasks = workers.start()
+        from .requests import playnow
+        playnow.requeue_interrupted()
         tasks.append(asyncio.get_running_loop().create_task(_startup_checks()))
     log.info("continuo %s up (navidrome auth: %s)", __version__, config.settings.navidrome_auth)
     try:
