@@ -446,3 +446,101 @@ async def unified_search(q: str, types: tuple[str, ...], limit: int,
     if "track" in want:
         results += merge_tracks(library["song"], cat_tracks, index, requests, limit, req_db.active_tracks())
     return {"query": q, "sources": sources, "results": results}
+
+
+# ---- quick search: the top few, fast, while typing ----------------------------------------------
+
+_quick_cache = TTLCache(600.0, max_items=512)
+# MusicBrainz is paced to one call a second and sheds load at busy times: while typing, its artist
+# candidates get this long, then the quick search goes with Lidarr's alone.
+_QUICK_MB_BUDGET_S = 1.2
+
+
+def _caa(release_mbid: Optional[str]) -> Optional[str]:
+    return f"https://coverartarchive.org/release/{release_mbid}/front-500" if release_mbid else None
+
+
+async def _quick_catalog(q: str, limit: int) -> dict:
+    """The catalogue part of a quick search, for any account (cached by query): the most listened
+    artists matching [q], and the top one's most listened albums and songs.
+
+    Candidates come from MusicBrainz's artist search (which finds "Beyoncé" for "bey") within a
+    short budget, and Lidarr's (fast, no rate limit) beside it; only names containing what was
+    typed count, and ListenBrainz's listen counts rank them, so "sabrina" is Sabrina Carpenter
+    before a dozen artists called Sabrina."""
+    from ..upstream import listenbrainz
+    want = normalise(q)
+
+    async def from_musicbrainz() -> list[dict]:
+        try:
+            data = await asyncio.wait_for(musicbrainz._get("/artist", {"query": q, "limit": 15}, retries=0),
+                                          _QUICK_MB_BUDGET_S)
+        except (asyncio.TimeoutError, httpx.HTTPError, ValueError):
+            return []
+        return [{"kind": "artist", "name": a.get("name"), "musicBrainzArtistId": a.get("id"), "imageUrl": None,
+                 "lidarrArtistId": None} for a in data.get("artists") or [] if a.get("id") and a.get("name")]
+
+    async def from_lidarr() -> list[dict]:
+        try:
+            return await _catalog_artists(q)
+        except (httpx.HTTPError, ValueError):
+            return []
+
+    mb, lid = await asyncio.gather(from_musicbrainz(), from_lidarr())
+    pool: dict[str, dict] = {}
+    for a in lid + mb:                                     # Lidarr's carry pictures: theirs first
+        mbid = a.get("musicBrainzArtistId")
+        if mbid and mbid not in pool and want and want in normalise(a.get("name")):
+            pool[mbid] = a
+    listens = await listenbrainz.artist_popularity(list(pool))
+    artists = sorted(pool.values(), key=lambda a: -listens.get(a["musicBrainzArtistId"], 0))[:limit]
+    if not artists:
+        return {"artists": [], "albums": [], "tracks": []}
+    top = artists[0]
+    albums_raw, tracks_raw = await asyncio.gather(
+        listenbrainz.top_release_groups(top["musicBrainzArtistId"], limit=limit),
+        listenbrainz.top_recordings(top["musicBrainzArtistId"], limit=limit))
+    albums = [{"kind": "album", "title": a["title"], "artist": top["name"], "year": a["year"],
+               "albumType": a["albumType"], "imageUrl": _caa(a["caaReleaseMbid"]),
+               "musicBrainzReleaseGroupId": a["musicBrainzReleaseGroupId"], "musicBrainzArtistId": top["musicBrainzArtistId"],
+               "releaseIds": [], "owned": False, "trackCount": None, "lidarrAlbumId": None}
+              for a in albums_raw or []]
+    by_title = {normalise(a["title"]): a for a in albums}
+    tracks = []
+    for t in tracks_raw or []:
+        if not t.get("recordingMbid"):
+            continue
+        album = by_title.get(normalise(t.get("releaseName")))
+        tracks.append({"kind": "track", "musicBrainzRecordingId": t["recordingMbid"], "title": t["title"],
+                       "artist": t.get("artist") or top["name"], "durationMs": t.get("durationMs"),
+                       "album": {"title": t.get("releaseName"),
+                                 "musicBrainzReleaseGroupId": album["musicBrainzReleaseGroupId"] if album else None,
+                                 "year": album["year"] if album else None, "albumType": album["albumType"] if album else None},
+                       "imageUrl": album["imageUrl"] if album else None})
+    return {"artists": artists, "albums": albums, "tracks": tracks}
+
+
+async def quick_search(q: str, navidrome_user: str, user_id: Optional[int] = None, limit: int = 3) -> dict:
+    """The top few, fast, for searching while typing: your library's best matches and the
+    catalogue's most listened (see _quick_catalog), in the full search's shape. The full search
+    (songs from MusicBrainz, everything else) is for pressing search or More results."""
+    library_t = navidrome.search3(q, navidrome_user, artists=limit, albums=limit, songs=limit)
+    catalog_t = cached(_quick_cache, normalise(q), lambda: _quick_catalog(q, limit))
+    library, catalog = await asyncio.gather(library_t, catalog_t, return_exceptions=True)
+    sources = {"library": "ok", "catalog": "ok"}
+    if isinstance(library, BaseException):
+        log.warning("quick search: library unavailable: %s", library)
+        sources["library"] = "unavailable"
+        library = {"artist": [], "album": [], "song": []}
+    if isinstance(catalog, BaseException):
+        if not isinstance(catalog, (httpx.HTTPError, ValueError)):
+            raise catalog
+        log.warning("quick search: catalogue unavailable: %s", catalog)
+        sources["catalog"] = "unavailable"
+        catalog = {"artists": [], "albums": [], "tracks": []}
+    index = _LibraryIndex(lib_db.all_albums(), user_id)
+    requests = req_db.active_by_release_group()
+    results = (merge_albums(library["album"], catalog["albums"], index, requests, limit)
+               + merge_artists(library["artist"], catalog["artists"], limit)
+               + merge_tracks(library["song"], catalog["tracks"], index, requests, limit, req_db.active_tracks()))
+    return {"query": q, "sources": sources, "results": results, "partial": True}

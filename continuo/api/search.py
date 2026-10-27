@@ -1,4 +1,5 @@
 """Unified search and catalogue browsing (PLAN.md §3.2)."""
+import asyncio
 import re
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -9,7 +10,7 @@ from ..db import identity
 from ..db import library as lib_db
 from ..db import requests as req_db
 from ..errors import ApiError
-from ..ratelimit import catalog_limiter, search_limiter
+from ..ratelimit import catalog_limiter, quick_search_limiter, search_limiter
 from ..requests.normalise import album_key
 from ..search import album_match, artist_info, merge, resolve
 from ..upstream import lidarr, musicbrainz
@@ -29,7 +30,13 @@ def _check_mbid(mbid: str) -> str:
 async def search(request: Request, q: str = Query(..., min_length=1, max_length=200),
                  types: str = Query("album,artist,track"),
                  limit: int = Query(25, ge=1, le=50),
+                 quick: bool = Query(False),
                  user: CurrentUser = Depends(require_user)) -> dict:
+    """quick=true: the top few, fast, for searching while typing (merge.quick_search); its own,
+    roomier rate limit, since it's asked at almost every keystroke."""
+    if quick:
+        quick_search_limiter.check(request)
+        return await merge.quick_search(q.strip(), user.navidrome_username, user.id, limit=min(limit, 5))
     search_limiter.check(request)
     wanted = tuple(t for t in (x.strip() for x in types.split(",")) if t in merge.ALL_TYPES)
     if not wanted:
@@ -109,13 +116,15 @@ async def catalog_artist(request: Request, mbid: str,
 async def catalog_album(request: Request, mbid: str,
                         user: CurrentUser = Depends(require_user)) -> dict:
     catalog_limiter.check(request)
-    info = await lidarr.lookup_album_by_id(_check_mbid(mbid))
+    mbid = _check_mbid(mbid)
+    # Lidarr's album and MusicBrainz's tracklist at once: neither needs the other.
+    info, tracks = await asyncio.gather(lidarr.lookup_album_by_id(mbid), musicbrainz.album_tracks(mbid))
     if not info:
         raise ApiError(404, "not_found", "Album not found in the catalogue.")
     album = lidarr.normalize_album(info)
     index = merge._LibraryIndex(lib_db.all_albums(), user.id)
     out = _album_out(album, _album_availability(album, index, req_db.active_by_release_group()))
-    out["tracks"] = await musicbrainz.album_tracks(mbid)
+    out["tracks"] = tracks
     return out
 
 

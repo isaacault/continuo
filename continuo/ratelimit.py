@@ -54,6 +54,8 @@ def client_ip(request: Request) -> str:
 
 login_limiter = SlidingWindowLimiter(10, 300)
 search_limiter = SlidingWindowLimiter(20, 10)
+# Searching while typing asks at almost every keystroke (debounced in the app).
+quick_search_limiter = SlidingWindowLimiter(60, 10)
 catalog_limiter = SlidingWindowLimiter(30, 10)
 # Upstream fetches of /v1/artwork (cache misses only): a grid of covers, not a scraper.
 artwork_limiter = SlidingWindowLimiter(300, 60)

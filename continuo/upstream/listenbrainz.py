@@ -88,3 +88,51 @@ async def top_recordings(artist_mbid: str, limit: int = 10) -> Optional[list[dic
             "releaseName": t.get("release_name"),
         })
     return out[:limit]
+
+
+async def _popularity(kind: str, key: str, mbids: list[str]) -> dict[str, int]:
+    """Total listens per MBID ({} when ListenBrainz failed): [kind] is artist or release-group."""
+    mbids = [m for m in dict.fromkeys(mbids) if m]
+    if not mbids:
+        return {}
+    token = config.settings.listenbrainz_token
+    try:
+        r = await _client("listenbrainz-auth" if token else "listenbrainz", _API_URL, token).post(
+            f"/popularity/{kind}", json={f"{key}_mbids": mbids})
+        r.raise_for_status()
+        data = r.json()
+    except (httpx.HTTPError, ValueError) as e:
+        log.warning("listenbrainz: %s popularity failed: %s", kind, e)
+        return {}
+    return {x.get(f"{key}_mbid"): int(x.get("total_listen_count") or 0) for x in data if isinstance(x, dict)}
+
+
+async def artist_popularity(mbids: list[str]) -> dict[str, int]:
+    return await _popularity("artist", "artist", mbids)
+
+
+async def top_release_groups(artist_mbid: str, limit: int = 5) -> Optional[list[dict]]:
+    """An artist's most listened albums: [{musicBrainzReleaseGroupId, title, year, albumType,
+    caaReleaseMbid, listens}]; None without a token or when ListenBrainz failed."""
+    token = config.settings.listenbrainz_token
+    if not token:
+        return None
+    try:
+        r = await _client("listenbrainz-auth", _API_URL, token).get(
+            f"/popularity/top-release-groups-for-artist/{artist_mbid}")
+        r.raise_for_status()
+        data = r.json()
+    except (httpx.HTTPError, ValueError) as e:
+        log.warning("listenbrainz: top albums for %s failed: %s", artist_mbid, e)
+        return None
+    out = []
+    for x in data if isinstance(data, list) else []:
+        rg = x.get("release_group") or {}
+        if not x.get("release_group_mbid") or not rg.get("name"):
+            continue
+        date = rg.get("date") or ""
+        out.append({"musicBrainzReleaseGroupId": x["release_group_mbid"], "title": rg["name"],
+                    "year": int(date[:4]) if date[:4].isdigit() else None, "albumType": rg.get("type"),
+                    "caaReleaseMbid": rg.get("caa_release_mbid"), "listens": int(x.get("total_listen_count") or 0)})
+    return out[:limit]
+
