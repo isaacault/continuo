@@ -96,3 +96,8 @@ def test_a_slow_listenbrainz_doesn_t_hold_the_quick_search_up_nor_stay_cached(up
     assert "artist" in kinds and "album" in kinds and "track" not in kinds, "the songs left out, the rest there"
     asyncio.run(merge.quick_search("sabrina", "isaac"))
     assert upstreams["mb"] == 2, "a cut-short result is asked again next time"
+
+
+def test_the_fallback_quick_search_is_in_its_order_too(upstreams):
+    out = asyncio.run(merge.quick_search("sabrina", "isaac"))
+    assert out["ranked"] is True, "most listened first: the app keeps the order"

@@ -610,4 +610,6 @@ async def quick_search(q: str, navidrome_user: str, user_id: Optional[int] = Non
                + merge_artists(library["artist"], catalog["artists"], limit)
                + merge_tracks(library["song"], catalog["tracks"], index, requests, limit, req_db.active_tracks()))
     return {"query": q, "sources": sources, "results": results, "partial": True,
-            "ranked": bool(catalog.get("ranked")), "best": lead(q, results, catalog.get("best"))}
+            # Both quick catalogues come most listened first (the fallback by ListenBrainz's
+            # listens): the order stands either way.
+            "ranked": True, "best": lead(q, results, catalog.get("best"))}
