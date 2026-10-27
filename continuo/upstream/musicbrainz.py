@@ -202,17 +202,30 @@ async def album_tracks(release_group_mbid: str, release_mbid: Optional[str] = No
                        strict: bool = False) -> list[dict]:
     """Tracklist of one canonical official release of the group (or the given release).
     A release's tracklist never changes, so it's cached for the process life (bounded).
-    [] when MusicBrainz fails, or with [strict] raises Unavailable."""
+    [] when MusicBrainz fails, or with [strict] raises Unavailable.
+
+    For a group, one call: the group's official releases with their tracks (a browse), the
+    canonical one picked from them; MusicBrainz is paced to a call a second, so the two-step
+    group-then-release lookup cost an album page a second. Without official releases, the
+    two-step one is the fallback."""
     cache_key = release_mbid or release_group_mbid
     if cache_key in _tracklist_cache:
         return _tracklist_cache[cache_key]
     try:
+        rel = None
         if not release_mbid:
-            rg = await _get(f"/release-group/{release_group_mbid}", {"inc": "releases"})
-            release_mbid = _pick_release(rg.get("releases", []))
-            if not release_mbid:
-                return []
-        rel = await _get(f"/release/{release_mbid}", {"inc": "recordings"})
+            browse = await _get("/release", {"release-group": release_group_mbid, "inc": "recordings",
+                                             "status": "official", "limit": 25})
+            releases = browse.get("releases") or []
+            pick = _pick_release(releases)
+            rel = next((r for r in releases if r.get("id") == pick), None)
+            if rel is None:
+                rg = await _get(f"/release-group/{release_group_mbid}", {"inc": "releases"})
+                release_mbid = _pick_release(rg.get("releases", []))
+                if not release_mbid:
+                    return []
+        if rel is None:
+            rel = await _get(f"/release/{release_mbid}", {"inc": "recordings"})
     except (httpx.HTTPError, ValueError) as e:
         if strict:
             raise Unavailable(str(e) or e.__class__.__name__) from e
