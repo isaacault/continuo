@@ -196,6 +196,25 @@ def test_keep_files_the_cached_copy_as_a_single(client, world, monkeypatch):
     assert playnow.audio_path(streams_db.get(row["id"])), "the cache keeps its copy until evicted"
 
 
+def test_keeping_a_copy_below_the_library_s_formats_fetches_a_better_one(client, world, monkeypatch):
+    isaac = make_user()
+
+    def done(c):
+        _finished(world, _downloading(world))
+        return {"state": "Completed, Succeeded", "id": "t1"}
+    world["state"]["transfer"]["alice"] = done
+    row = _run(isaac["id"])
+    # Play now took a 192 kbps MP3: 230 s at 192 kbit/s.
+    streams_db.update(row["id"], extension="mp3", size=230 * 192 * 1000 // 8, duration_ms=230_000)
+    s = login(client)
+    out = client.post(f"/v1/play-now/{row['id']}/keep", headers=bearer(s))
+    assert out.status_code == 200, out.text
+    req = req_db.get(out.json()["id"])
+    assert not (req.get("fetch") or {}).get("local"), "searched for like any song request, in the library's formats"
+    assert playnow.library_quality({"extension": "flac", "size": 1, "duration_ms": 1})
+    assert playnow.library_quality({"extension": "mp3", "size": 230 * 320 * 1000 // 8, "duration_ms": 230_000})
+
+
 def test_audio_waits_for_bytes_still_downloading(client, world):
     """The player reads ahead of the download: the response waits for slskd's next bytes."""
     import threading
