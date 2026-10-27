@@ -55,7 +55,7 @@ def req(fake, monkeypatch):
     monkeypatch.setattr(slskd, "enabled", lambda: True)
     fake.on("GET", f"{LIDARR}/track", [{"title": t} for t in TITLES])
 
-    async def search(text, timeout_s=20.0):
+    async def search(text, **_kw):
         return RESPONSES
     monkeypatch.setattr(soulseek, "search", search)
     fake.on("POST", f"{SLSKD}/transfers/downloads/good", {}, status=201)

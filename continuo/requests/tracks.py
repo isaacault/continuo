@@ -122,7 +122,7 @@ async def _search(row: dict) -> dict:
     fetch = row.get("fetch") or {}
     tried = {tuple(x) for x in fetch.get("tried") or []}
     refused = set(fetch.get("refused") or [])
-    responses = await soulseek.search(f"{t.get('artist') or ''} {t['title']}".strip())
+    responses = await soulseek.search_any(soulseek.queries(t.get("artist") or "", t["title"]))
     # Copies that already failed don't count, nor anything from someone who rejected us.
     responses = [r for r in responses if r.get("username") not in refused]
     for r in responses:

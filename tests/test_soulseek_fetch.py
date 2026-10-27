@@ -109,3 +109,22 @@ def test_a_search_past_the_cap_is_stopped_and_keeps_its_results(fake, monkeypatc
     out = asyncio.run(soulseek.search("anything"))
     assert seen["calls"].index("PUT") < seen["calls"].index("DELETE"), "stopped, then cleaned up"
     assert out == RESPONSES
+
+
+def test_queries_route_around_a_blocked_artist_name():
+    """Soulseek returns nothing for "Kendrick Lamar"; "PRIDE Lamar" finds the song."""
+    assert soulseek.queries("Kendrick Lamar", "PRIDE.") == ["Kendrick Lamar PRIDE", "PRIDE Lamar", "Kendrick PRIDE", "PRIDE"]
+    assert soulseek.queries("ABBA", "Waterloo") == ["ABBA Waterloo", "Waterloo"]
+    assert soulseek.queries("", "Gemini") == ["Gemini"]
+
+
+def test_search_any_takes_the_first_search_that_answers(monkeypatch):
+    import asyncio
+    asked = []
+
+    async def search(text, **_kw):
+        asked.append(text)
+        return [] if "Kendrick Lamar" in text else [{"username": "u", "files": []}]
+    monkeypatch.setattr(soulseek, "search", search)
+    out = asyncio.run(soulseek.search_any(soulseek.queries("Kendrick Lamar", "PRIDE.")))
+    assert asked == ["Kendrick Lamar PRIDE", "PRIDE Lamar"] and out
