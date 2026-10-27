@@ -84,3 +84,15 @@ def test_a_tracklist_is_one_musicbrainz_call(monkeypatch):
     monkeypatch.setattr(musicbrainz, "_get", get)
     tracks = asyncio.run(musicbrainz.album_tracks("rg-sns"))
     assert asked == ["/release"] and tracks[0]["title"] == "Taste" and tracks[0]["musicBrainzRecordingId"] == "rec-t"
+
+
+def test_a_slow_listenbrainz_doesn_t_hold_the_quick_search_up_nor_stay_cached(upstreams, monkeypatch):
+    async def hangs(mbid, limit=5):
+        await asyncio.sleep(5)
+    monkeypatch.setattr(listenbrainz, "top_recordings", hangs)
+    monkeypatch.setattr(merge, "_QUICK_LB_BUDGET_S", 0.05)
+    out = asyncio.run(merge.quick_search("sabrina", "isaac"))
+    kinds = [r["kind"] for r in out["results"]]
+    assert "artist" in kinds and "album" in kinds and "track" not in kinds, "the songs left out, the rest there"
+    asyncio.run(merge.quick_search("sabrina", "isaac"))
+    assert upstreams["mb"] == 2, "a cut-short result is asked again next time"

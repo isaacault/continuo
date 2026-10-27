@@ -454,6 +454,17 @@ _quick_cache = TTLCache(600.0, max_items=512)
 # MusicBrainz is paced to one call a second and sheds load at busy times: while typing, its artist
 # candidates get this long, then the quick search goes with Lidarr's alone.
 _QUICK_MB_BUDGET_S = 1.2
+# ListenBrainz usually answers in 0.1-0.4 s but now and then hangs to its 15 s timeout: while
+# typing, its ranking gets this long, and so do the top artist's albums and songs.
+_QUICK_LB_BUDGET_S = 1.5
+
+
+async def _within(budget: float, coro, fallback):
+    """[coro]'s result, or [fallback] (and whether it was the fallback) past [budget] seconds."""
+    try:
+        return await asyncio.wait_for(coro, budget), False
+    except asyncio.TimeoutError:
+        return fallback, True
 
 
 def _caa(release_mbid: Optional[str]) -> Optional[str]:
@@ -492,14 +503,15 @@ async def _quick_catalog(q: str, limit: int) -> dict:
         mbid = a.get("musicBrainzArtistId")
         if mbid and mbid not in pool and want and want in normalise(a.get("name")):
             pool[mbid] = a
-    listens = await listenbrainz.artist_popularity(list(pool))
+    listens, slow = await _within(_QUICK_LB_BUDGET_S, listenbrainz.artist_popularity(list(pool)), {})
     artists = sorted(pool.values(), key=lambda a: -listens.get(a["musicBrainzArtistId"], 0))[:limit]
     if not artists:
-        return {"artists": [], "albums": [], "tracks": []}
+        return {"artists": [], "albums": [], "tracks": [], "complete": not slow}
     top = artists[0]
-    albums_raw, tracks_raw = await asyncio.gather(
-        listenbrainz.top_release_groups(top["musicBrainzArtistId"], limit=limit),
-        listenbrainz.top_recordings(top["musicBrainzArtistId"], limit=limit))
+    (albums_raw, slow_albums), (tracks_raw, slow_tracks) = await asyncio.gather(
+        _within(_QUICK_LB_BUDGET_S, listenbrainz.top_release_groups(top["musicBrainzArtistId"], limit=limit), None),
+        _within(_QUICK_LB_BUDGET_S, listenbrainz.top_recordings(top["musicBrainzArtistId"], limit=limit), None))
+    slow = slow or slow_albums or slow_tracks
     albums = [{"kind": "album", "title": a["title"], "artist": top["name"], "year": a["year"],
                "albumType": a["albumType"], "imageUrl": _caa(a["caaReleaseMbid"]),
                "musicBrainzReleaseGroupId": a["musicBrainzReleaseGroupId"], "musicBrainzArtistId": top["musicBrainzArtistId"],
@@ -517,7 +529,19 @@ async def _quick_catalog(q: str, limit: int) -> dict:
                                  "musicBrainzReleaseGroupId": album["musicBrainzReleaseGroupId"] if album else None,
                                  "year": album["year"] if album else None, "albumType": album["albumType"] if album else None},
                        "imageUrl": album["imageUrl"] if album else None})
-    return {"artists": artists, "albums": albums, "tracks": tracks}
+    return {"artists": artists, "albums": albums, "tracks": tracks, "complete": not slow}
+
+
+async def _quick_cached(q: str, limit: int) -> dict:
+    """_quick_catalog, cached by query; one cut short by a slow ListenBrainz isn't kept."""
+    key = normalise(q)
+    hit = _quick_cache.get(key)
+    if hit is not None:
+        return hit
+    value = await _quick_catalog(q, limit)
+    if value.get("complete", True):
+        _quick_cache.put(key, value)
+    return value
 
 
 async def quick_search(q: str, navidrome_user: str, user_id: Optional[int] = None, limit: int = 3) -> dict:
@@ -525,7 +549,7 @@ async def quick_search(q: str, navidrome_user: str, user_id: Optional[int] = Non
     catalogue's most listened (see _quick_catalog), in the full search's shape. The full search
     (songs from MusicBrainz, everything else) is for pressing search or More results."""
     library_t = navidrome.search3(q, navidrome_user, artists=limit, albums=limit, songs=limit)
-    catalog_t = cached(_quick_cache, normalise(q), lambda: _quick_catalog(q, limit))
+    catalog_t = _quick_cached(q, limit)
     library, catalog = await asyncio.gather(library_t, catalog_t, return_exceptions=True)
     sources = {"library": "ok", "catalog": "ok"}
     if isinstance(library, BaseException):
