@@ -118,3 +118,13 @@ def test_continuo_keeps_inside_deezer_s_rate_limit():
     with pytest.raises(deezer.Exhausted):
         deezer._spend()
     deezer.reset()
+
+
+def test_a_ranked_search_says_so(upstreams, monkeypatch):
+    from continuo.upstream import navidrome
+
+    async def library(q, user, artists=3, albums=3, songs=3):
+        return {"artist": [], "album": [], "song": []}
+    monkeypatch.setattr(navidrome, "search3", library)
+    out = asyncio.run(merge.quick_search("espresso", "isaac"))
+    assert out["ranked"] is True and out["best"] == "mb:rec:rec-0"
