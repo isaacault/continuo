@@ -242,9 +242,23 @@ def _to_cache(stream_id: str) -> bool:
     return True
 
 
+def library_quality(row: dict) -> bool:
+    """Whether a Play now copy is one the library would take (Soularr's formats: FLAC, MP3 320).
+    Play now takes the quickest decent copy instead (#55), often a smaller MP3. Its bit rate is
+    its size over its length."""
+    ext = (row.get("extension") or "").lower()
+    size, ms = row.get("size") or 0, row.get("duration_ms") or 0
+    kbps = round(size * 8 / ms) if size and ms else None        # bytes*8 / ms = kbit/s
+    c = soulseek.Candidate(username="", filename="", size=size, extension=ext, bit_rate=kbps, length_s=None,
+                           free_slot=True, queue_length=0, upload_speed=0)
+    return soulseek._format_rank(c, soulseek.formats(soulseek.LIBRARY)) is not None
+
+
 def keep(user: dict, stream_id: str) -> dict:
     """Keep a streamed song: a single-song request (#24) that files the cached copy into the
-    account's library, MusicBrainz-tagged; nothing is downloaded again."""
+    account's library, MusicBrainz-tagged; nothing is downloaded again. A copy below the
+    library's formats (Play now took the quickest) isn't filed: the request fetches a copy the
+    library would choose, as any song request does, and the Play now one stays a stream."""
     from ..db import requests as req_db
     row = streams_db.get(stream_id)
     if row is None or row["status"] != "ready" or not _cached_path(row):
@@ -254,8 +268,10 @@ def keep(user: dict, stream_id: str) -> dict:
         return existing
     req = req_db.create(mb_release_group_id=row["recording_id"], title=row["title"], artist=row["artist"],
                         year=None, artwork_url=None, user_id=user["id"], kind="track")
+    good = library_quality(row)
     req = req_db.update(req["id"], album_release_group_id=row.get("album_rg"), track=None,
-                        fetch={"local": _cached_path(row), "extension": row.get("extension")})
-    req_db.add_event(req["id"], "requested", {"by": user["username"], "kind": "track", "from": "play_now"})
+                        fetch={"local": _cached_path(row), "extension": row.get("extension")} if good else None)
+    req_db.add_event(req["id"], "requested", {"by": user["username"], "kind": "track", "from": "play_now",
+                                              "refetch": not good})
     streams_db.update(stream_id, tried={**(row.get("tried") or {}), "kept": True})
     return req
