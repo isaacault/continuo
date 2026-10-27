@@ -3,7 +3,7 @@
 An account with its own library (#27) adds and removes in that library alone: its albums, its
 Recently removed. Without one, removal is from the shared store, admins only by default
 (LIBRARY_REMOVAL_ROLE=user opens it to every account)."""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from .. import config
 from ..auth.deps import CurrentUser, require_user
@@ -32,6 +32,24 @@ async def artist_names(_user: CurrentUser = Depends(require_user)) -> list[dict]
     return [{"name": r["library_name"], "originalName": r["original_name"], "sortName": r["sort_name"],
              "musicBrainzArtistId": r["mb_artist_id"]}
             for r in identity.artist_names() if r["original_name"]]
+
+
+@router.get("/albums/{navidrome_id}/tracklist")
+async def album_tracklist(request: Request, navidrome_id: str, user: CurrentUser = Depends(require_user)) -> dict:
+    """The whole album a library album is of, from the catalogue: for a single song filed under
+    _singles, or an album the library only partly has, the app shows the rest beside what's
+    there (Play now, Request). 404 when the album has no known release group."""
+    from ..db import library as lib_db
+    from ..ratelimit import catalog_limiter
+    from ..search import merge
+    from ..upstream import musicbrainz
+    catalog_limiter.check(request)
+    # The account's own copy (#27) is found through the store album it's a copy of.
+    album = merge._LibraryIndex(lib_db.all_albums(), user.id).by_id.get(navidrome_id)
+    rg = (album or {}).get("mbz_release_group_id")
+    if not rg:
+        raise ApiError(404, "not_found", "No catalogue album is known for that library album.")
+    return {"musicBrainzReleaseGroupId": rg, "tracks": await musicbrainz.album_tracks(rg)}
 
 
 @router.post("/albums/{navidrome_id}/remove")
