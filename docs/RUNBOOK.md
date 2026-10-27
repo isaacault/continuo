@@ -279,6 +279,16 @@ sops secret) to enable them; without it `topTracks` is empty and `sources.topTra
 only an artist no source knows is a 404. Check: `curl -s -H "Authorization: Bearer <token>"
 https://music-api.ault.me/v1/catalog/artists/69158f97-4c07-4c4e-baf8-4e4ab1ed666e | jq .sources`.
 
+**Ranked search** (#57, 2026-10-27): search finds and ranks with Deezer's public search
+(`api.deezer.com`, no key; continuo keeps to 45 of its 50 requests in 5 s), gives the hits
+MusicBrainz IDs through ListenBrainz (`metadata/lookup`, `metadata/recording`, needs
+`LISTENBRAINZ_TOKEN`) and Lidarr, and caches IDs a day. Only continuo calls Deezer; search texts
+are what it sends. Deezer's developer terms restrict its *audio*, which continuo never touches,
+and bar promoting unauthorized downloads; whether ranking what Soulseek fetches counts is the
+operator's call. `SEARCH_DEEZER=false` turns it off: search is then MusicBrainz's and Lidarr's
+alone (popularity from ListenBrainz for quick search's artists only), as before #57. Deezer
+refusing (quota, a block) falls back the same way on its own.
+
 **Catalogue artwork** (issue #13, decided 2026-10-21): search, catalogue and request outputs
 never point at third-party hosts; catalogue art is `{PUBLIC_BASE_URL}/v1/artwork?src=<url>[&size=px]`
 (library art stays Subsonic `getCoverArt`). The route is **unauthenticated** on purpose: Coil
