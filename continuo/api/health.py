@@ -25,6 +25,8 @@ async def upstream_status() -> dict:
     checks = {"navidrome": navidrome.ping(), "lidarr": lidarr.ping()}
     if slskd.enabled():
         checks["slskd"] = slskd.ping()
+        # slskd can be up and off the Soulseek network: Play now and song requests then fail.
+        checks["soulseek"] = slskd.logged_in()
     results = await asyncio.gather(*checks.values(), return_exceptions=True)
     out = {name: ("ok" if r is True else "down") for name, r in zip(checks, results, strict=True)}
     _upstream_cache = (time.monotonic(), out)
