@@ -128,3 +128,11 @@ def test_a_ranked_search_says_so(upstreams, monkeypatch):
     monkeypatch.setattr(navidrome, "search3", library)
     out = asyncio.run(merge.quick_search("espresso", "isaac"))
     assert out["ranked"] is True and out["best"] == "mb:rec:rec-0"
+
+
+def test_deezer_can_be_turned_off(upstreams, monkeypatch):
+    import dataclasses
+
+    from continuo import config
+    monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, search_deezer=False))
+    assert asyncio.run(merge._ranked("espresso", 3)) is None, "MusicBrainz's search alone"

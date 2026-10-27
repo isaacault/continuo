@@ -549,6 +549,8 @@ async def _ranked(q: str, limit: int) -> Optional[dict]:
     answer now (its quota, an outage): the caller uses MusicBrainz's search instead."""
     from ..upstream import deezer
     from . import ranked
+    if not config.settings.search_deezer:
+        return None
     try:
         return await ranked.catalog(q, limit)
     except (deezer.Exhausted, httpx.HTTPError, ValueError) as e:
