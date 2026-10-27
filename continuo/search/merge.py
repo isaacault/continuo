@@ -391,6 +391,11 @@ async def _add_renamed_library_artists(library: dict, catalog: list[dict], navid
                 break
 
 
+def _first_then(first: list[dict], rest: list[dict], id_field: str) -> list[dict]:
+    seen = {x.get(id_field) for x in first if x.get(id_field)}
+    return first + [x for x in rest if not x.get(id_field) or x.get(id_field) not in seen]
+
+
 async def unified_search(q: str, types: tuple[str, ...], limit: int,
                          navidrome_user: str, user_id: Optional[int] = None) -> dict:
     want = set(types)
@@ -407,9 +412,10 @@ async def unified_search(q: str, types: tuple[str, ...], limit: int,
         _catalog_albums(q) if "album" in want else none(),
         _catalog_artists(q) if "artist" in want else none(),
         musicbrainz.search_tracks(q, limit) if "track" in want else none(),
+        _ranked(q, min(limit, 10)),
     ]
-    library, cat_albums, cat_artists, cat_tracks = await asyncio.gather(*tasks,
-                                                                        return_exceptions=True)
+    library, cat_albums, cat_artists, cat_tracks, ranked_cat = await asyncio.gather(*tasks,
+                                                                                    return_exceptions=True)
     sources = {"library": "ok", "catalog": "ok"}
     if isinstance(library, BaseException):
         log.warning("search: library unavailable: %s", library)
@@ -428,6 +434,11 @@ async def unified_search(q: str, types: tuple[str, ...], limit: int,
     cat_albums = [] if isinstance(cat_albums, BaseException) else cat_albums
     cat_artists = [] if isinstance(cat_artists, BaseException) else cat_artists
     cat_tracks = [] if isinstance(cat_tracks, BaseException) else cat_tracks
+    # The ranked catalogue first (popular, by title), then MusicBrainz's and Lidarr's for depth.
+    ranked_cat = ranked_cat if isinstance(ranked_cat, dict) else {}
+    cat_albums = _first_then(ranked_cat.get("albums", []) if "album" in want else [], cat_albums, "musicBrainzReleaseGroupId")
+    cat_artists = _first_then(ranked_cat.get("artists", []) if "artist" in want else [], cat_artists, "musicBrainzArtistId")
+    cat_tracks = _first_then(ranked_cat.get("tracks", []) if "track" in want else [], cat_tracks, "musicBrainzRecordingId")
 
     if "artist" in want and cat_artists and not isinstance(library, BaseException):
         await _add_renamed_library_artists(library, cat_artists, navidrome_user)
@@ -445,7 +456,7 @@ async def unified_search(q: str, types: tuple[str, ...], limit: int,
         results += merge_artists(library["artist"], cat_artists, limit)
     if "track" in want:
         results += merge_tracks(library["song"], cat_tracks, index, requests, limit, req_db.active_tracks())
-    return {"query": q, "sources": sources, "results": results}
+    return {"query": q, "sources": sources, "results": results, "best": lead(q, results, ranked_cat.get("best"))}
 
 
 # ---- quick search: the top few, fast, while typing ----------------------------------------------
@@ -532,13 +543,42 @@ async def _quick_catalog(q: str, limit: int) -> dict:
     return {"artists": artists, "albums": albums, "tracks": tracks, "complete": not slow}
 
 
+async def _ranked(q: str, limit: int) -> Optional[dict]:
+    """search.ranked's catalogue (Deezer's ranking, MusicBrainz IDs), or None when Deezer can't
+    answer now (its quota, an outage): the caller uses MusicBrainz's search instead."""
+    from ..upstream import deezer
+    from . import ranked
+    try:
+        return await ranked.catalog(q, limit)
+    except (deezer.Exhausted, httpx.HTTPError, ValueError) as e:
+        log.info("search: ranked catalogue unavailable (%s), MusicBrainz's instead", e.__class__.__name__)
+        return None
+
+
+def lead(q: str, results: list[dict], catalog_best: Optional[str]) -> Optional[str]:
+    """The key of the hit the page leads with: one of yours whose name is what was typed (an
+    artist or album whose name starts so, a song with exactly that title: "bey" isn't your song
+    Beyond the Pine), else the catalogue's best."""
+    from .ranked import match
+    mine = [r for r in results if (r.get("availability") or {}).get("state") == "in_library"]
+    for want in (3.0, 2.0):
+        for kind in ("artist", "album", "track"):
+            if kind == "track" and want < 3.0:
+                continue
+            for r in mine:
+                if r["kind"] == kind and match(q, r.get("name") or r.get("title")) >= want:
+                    return r["key"]
+    return catalog_best if catalog_best in {r["key"] for r in results} else None
+
+
 async def _quick_cached(q: str, limit: int) -> dict:
-    """_quick_catalog, cached by query; one cut short by a slow ListenBrainz isn't kept."""
+    """The quick catalogue (ranked, else _quick_catalog), cached by query; one cut short by a
+    slow ListenBrainz isn't kept."""
     key = normalise(q)
     hit = _quick_cache.get(key)
     if hit is not None:
         return hit
-    value = await _quick_catalog(q, limit)
+    value = await _ranked(q, limit) or await _quick_catalog(q, limit)
     if value.get("complete", True):
         _quick_cache.put(key, value)
     return value
@@ -567,4 +607,5 @@ async def quick_search(q: str, navidrome_user: str, user_id: Optional[int] = Non
     results = (merge_albums(library["album"], catalog["albums"], index, requests, limit)
                + merge_artists(library["artist"], catalog["artists"], limit)
                + merge_tracks(library["song"], catalog["tracks"], index, requests, limit, req_db.active_tracks()))
-    return {"query": q, "sources": sources, "results": results, "partial": True}
+    return {"query": q, "sources": sources, "results": results, "partial": True,
+            "best": lead(q, results, catalog.get("best"))}

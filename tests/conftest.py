@@ -81,6 +81,11 @@ def fake(monkeypatch, tmp_path):
     facade.invalidate_all()
     lidarr._album_cache.clear()
     merge._catalog_cache.clear()
+    from continuo.search import ranked
+    from continuo.upstream import deezer
+    ranked._ids_cache.clear()
+    merge._quick_cache.clear()
+    deezer.reset()
     pipeline._progress.clear()
     status._last_hash.clear()
     slskd._transfers_cache = (0.0, None)
