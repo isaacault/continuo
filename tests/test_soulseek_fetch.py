@@ -128,3 +128,17 @@ def test_search_any_takes_the_first_search_that_answers(monkeypatch):
     monkeypatch.setattr(soulseek, "search", search)
     out = asyncio.run(soulseek.search_any(soulseek.queries("Kendrick Lamar", "PRIDE.")))
     assert asked == ["Kendrick Lamar PRIDE", "PRIDE Lamar"] and out
+
+
+def test_play_now_takes_the_copy_that_arrives_soonest_in_any_decent_format():
+    flac = _resp("flac", [_f(r"@@a\Peach Pit\Shampoo Bottles.flac", length=212, size=40_000_000)], speed=2_000_000)
+    mp3 = _resp("mp3", [_f(r"@@b\Peach Pit\Shampoo Bottles.mp3", kbps=256, length=212, size=7_000_000)], speed=2_000_000)
+    aac = _resp("aac", [_f(r"@@c\Peach Pit\Shampoo Bottles.m4a", length=212, size=6_000_000)], speed=500_000)
+    c = soulseek.best([flac, mp3, aac], "Peach Pit", "Shampoo Bottles", 212_000, soulseek.FASTEST, FORMATS)
+    assert c.username == "mp3", "3.5 s beats the AAC's 12 s and the FLAC's 20 s; 256 kbps isn't in the library's formats"
+
+
+def test_play_now_skips_lossy_copies_too_poor_to_hear():
+    poor = [_resp("128", [_f(r"@@a\Peach Pit\Shampoo Bottles.mp3", kbps=128, length=212, size=3_400_000)]),
+            _resp("tiny", [_f(r"@@b\Peach Pit\Shampoo Bottles.ogg", length=212, size=2_000_000)])]
+    assert soulseek.best(poor, "Peach Pit", "Shampoo Bottles", 212_000, soulseek.FASTEST, FORMATS) is None
