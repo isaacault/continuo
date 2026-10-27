@@ -76,7 +76,7 @@ def test_found_downloaded_filed_and_available(client, setup, monkeypatch):
     rid = _request(client)["id"]
     enqueued, state = [], {"t": {"state": "InProgress", "percentComplete": 40.0, "id": "t1"}}
 
-    async def search(text, timeout_s=20.0):
+    async def search(text, **_kw):
         assert text == "Peach Pit Drop the Guillotine"
         return [_hit()]
 
@@ -132,7 +132,7 @@ def test_nobody_has_it_backs_off_and_still_looks(client, setup, monkeypatch):
     make_user()
     rid = _request(client)["id"]
 
-    async def search(text, timeout_s=20.0):
+    async def search(text, **_kw):
         return [_hit(name="02 Drop the Guillotine (Live).flac")]   # a live version isn't the song
     monkeypatch.setattr(soulseek, "search", search)
     asyncio.run(tracks.tick())
@@ -153,7 +153,7 @@ def test_a_failed_copy_is_skipped_for_the_next(client, setup, monkeypatch):
     make_user()
     rid = _request(client)["id"]
 
-    async def search(text, timeout_s=20.0):
+    async def search(text, **_kw):
         return [_hit("alice"), {**_hit("bob"), "hasFreeUploadSlot": False}]
 
     async def enqueue(c):
@@ -232,7 +232,7 @@ def test_a_song_requested_while_musicbrainz_is_busy_starts_once_it_answers(clien
     monkeypatch.setattr(musicbrainz, "recording", lambda mbid: _rec())   # MusicBrainz answers again
     req_db.update(out["id"], next_attempt_at=None)
 
-    async def search(text, timeout_s=20.0):
+    async def search(text, **_kw):
         return []
     monkeypatch.setattr(soulseek, "search", search)
     asyncio.run(tracks.tick())                        # MusicBrainz answers: details, then searching
@@ -249,7 +249,7 @@ def test_someone_who_rejected_us_isnt_asked_again(client, setup, monkeypatch):
     make_user()
     rid = _request(client)["id"]
 
-    async def search(text, timeout_s=20.0):
+    async def search(text, **_kw):
         return [{**_hit("stavriani"), "files": _hit("stavriani")["files"] + _hit("stavriani", name="02 Drop the Guillotine (2).flac")["files"]},
                 {**_hit("jagodka"), "hasFreeUploadSlot": False}]
 

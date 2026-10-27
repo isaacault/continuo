@@ -151,8 +151,8 @@ async def _run(stream_id: str) -> None:
 
 async def _fetch(stream_id: str) -> None:
     row = streams_db.get(stream_id)
-    responses = await soulseek.search(f"{row['artist']} {row['title']}".strip(), quiet_s=SEARCH_QUIET_S,
-                                      max_s=SEARCH_MAX_S)
+    responses = await soulseek.search_any(soulseek.queries(row["artist"] or "", row["title"] or ""),
+                                          quiet_s=SEARCH_QUIET_S, max_s=SEARCH_MAX_S)
     tried: set[tuple[str, str]] = set()
     refused: set[str] = set()
     for _ in range(MAX_COPIES):

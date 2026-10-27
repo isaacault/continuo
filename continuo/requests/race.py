@@ -74,7 +74,7 @@ async def start(row: dict) -> Optional[dict]:
     except httpx.HTTPError:
         tracks = []
     titles = [t.get("title") or "" for t in tracks]
-    responses = await soulseek.search(f"{row.get('artist') or ''} {row.get('title') or ''}".strip())
+    responses = await soulseek.search_any(soulseek.queries(row.get("artist") or "", row.get("title") or ""))
     best = soulseek.best_album(responses, row.get("title") or "", titles)
     if best is None:
         races_db.add(row["id"], "soulseek", state="failed", detail="No complete copy on Soulseek")

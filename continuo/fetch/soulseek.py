@@ -229,6 +229,41 @@ async def search(text: str, quiet_s: float = 15.0, max_s: float | None = None) -
             pass
 
 
+_NOT_SEARCHABLE = re.compile(r"[^\w\s]+")
+
+
+def _searchable(text: str) -> str:
+    """Words only: Soulseek matches whole words, so "PRIDE." or "(feat. X)" can match nothing."""
+    return " ".join(_NOT_SEARCHABLE.sub(" ", text or "").split())
+
+
+def queries(artist: str, name: str) -> list[str]:
+    """Search texts for a song or album, most specific first. Soulseek's server returns nothing
+    for some artists' names as a search phrase ("Kendrick Lamar" gets no response at all, while
+    "Kendrick DAMN" gets hundreds), so the alternatives leave out part of the name: the title
+    with the artist's last word, with the first, then alone. Matching still wants the artist in
+    a copy's path, so a wider search can't pick someone else's song."""
+    a, n = _searchable(artist), _searchable(name)
+    words = a.split()
+    out = [f"{a} {n}".strip()]
+    if len(words) > 1:
+        out += [f"{n} {words[-1]}", f"{words[0]} {n}"]
+    out.append(n)
+    seen: set[str] = set()
+    return [q for q in out if q and not (q.lower() in seen or seen.add(q.lower()))]
+
+
+async def search_any(texts: list[str], quiet_s: float = 15.0, max_s: float | None = None) -> list[dict]:
+    """The responses of the first of [texts] that gets any; [] when none does."""
+    for text in texts:
+        responses = await search(text, quiet_s=quiet_s, max_s=max_s)
+        if responses:
+            if text != texts[0]:
+                log.info("soulseek: nothing for %r; %r found %d", texts[0], text, len(responses))
+            return responses
+    return []
+
+
 async def enqueue(c: Candidate) -> None:
     r = await slskd._client().post(f"/transfers/downloads/{c.username}", json=[{"filename": c.filename, "size": c.size}])
     r.raise_for_status()
