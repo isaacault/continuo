@@ -112,6 +112,15 @@ async def catalog_artist(request: Request, mbid: str,
     return page
 
 
+@router.get("/discover")
+async def discover(request: Request, user: CurrentUser = Depends(require_user)) -> dict:
+    """Home's discovery (search.discover): new releases from the account's artists, and songs
+    from artists like them; cached per account for 3 h."""
+    catalog_limiter.check(request)
+    from ..search import discover as discover_mod
+    return await discover_mod.page(user.id)
+
+
 @router.get("/catalog/albums/{mbid}")
 async def catalog_album(request: Request, mbid: str,
                         user: CurrentUser = Depends(require_user)) -> dict:
