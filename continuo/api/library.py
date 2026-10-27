@@ -3,7 +3,9 @@
 An account with its own library (#27) adds and removes in that library alone: its albums, its
 Recently removed. Without one, removal is from the shared store, admins only by default
 (LIBRARY_REMOVAL_ROLE=user opens it to every account)."""
-from fastapi import APIRouter, Depends, Request
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query, Request
 
 from .. import config
 from ..auth.deps import CurrentUser, require_user
@@ -50,6 +52,26 @@ async def album_tracklist(request: Request, navidrome_id: str, user: CurrentUser
     if not rg:
         raise ApiError(404, "not_found", "No catalogue album is known for that library album.")
     return {"musicBrainzReleaseGroupId": rg, "tracks": await musicbrainz.album_tracks(rg)}
+
+
+@router.get("/lyrics")
+async def lyrics(request: Request, artist: str = Query(..., min_length=1, max_length=300),
+                 title: str = Query(..., min_length=1, max_length=300), album: Optional[str] = Query(None, max_length=300),
+                 durationMs: Optional[int] = Query(None, ge=0), _user: CurrentUser = Depends(require_user)) -> dict:
+    """A song's lyrics from LRCLIB, for one the library has none for or isn't in the library
+    (Play now): {synced, lines: [{startMs, text}], instrumental, source}. 404 when none are known."""
+    import httpx
+
+    from ..ratelimit import catalog_limiter
+    from ..upstream import lrclib
+    catalog_limiter.check(request)
+    try:
+        found = await lrclib.lyrics(artist, title, album, round(durationMs / 1000) if durationMs else None)
+    except httpx.HTTPError as e:
+        raise ApiError(502, "lyrics_unavailable", "LRCLIB can't be reached right now.", True) from e
+    if found is None:
+        raise ApiError(404, "no_lyrics", "No lyrics are known for this song.")
+    return found
 
 
 @router.post("/albums/{navidrome_id}/remove")
