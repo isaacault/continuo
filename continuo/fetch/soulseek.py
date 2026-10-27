@@ -31,6 +31,11 @@ FAST_MIN_KBPS = 192
 _LOSSLESS = {"flac", "wav", "aiff", "aif", "wv", "ape", "alac"}
 
 
+class Offline(Exception):
+    """slskd isn't connected to the Soulseek server (it lost the connection, or is reconnecting):
+    nothing can be searched now. Not "nobody has it": callers try again later."""
+
+
 @dataclass(frozen=True)
 class Candidate:
     username: str
@@ -243,6 +248,12 @@ async def search(text: str, quiet_s: float = 15.0, max_s: float | None = None) -
         r = await c.get(f"/searches/{sid}/responses")
         r.raise_for_status()
         return r.json() or []
+    except httpx.HTTPStatusError as e:
+        # slskd answers 409 "must be connected and logged in" while it's off the server.
+        if e.response.status_code == 409 and "connected" in e.response.text:
+            raise Offline(e.response.text.strip('"')) from e
+        log.warning("soulseek: search %r failed: %s", text, e)
+        return []
     except (httpx.HTTPError, ValueError) as e:
         log.warning("soulseek: search %r failed: %s", text, e)
         return []

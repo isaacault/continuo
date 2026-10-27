@@ -151,8 +151,14 @@ async def _run(stream_id: str) -> None:
 
 async def _fetch(stream_id: str) -> None:
     row = streams_db.get(stream_id)
-    responses = await soulseek.search_any(soulseek.queries(row["artist"] or "", row["title"] or ""),
-                                          quiet_s=SEARCH_QUIET_S, max_s=SEARCH_MAX_S)
+    try:
+        responses = await soulseek.search_any(soulseek.queries(row["artist"] or "", row["title"] or ""),
+                                              quiet_s=SEARCH_QUIET_S, max_s=SEARCH_MAX_S)
+    except soulseek.Offline:
+        log.warning("play now %s: Soulseek is offline", stream_id)
+        streams_db.update(stream_id, status="failed",
+                          error="Soulseek is offline right now (the server's connection to it dropped). Try again in a few minutes.")
+        return
     tried: set[tuple[str, str]] = set()
     refused: set[str] = set()
     for _ in range(MAX_COPIES):
