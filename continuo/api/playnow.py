@@ -29,6 +29,12 @@ class PlayNowIn(BaseModel):
     title: str = Field(..., min_length=1, max_length=300)
     artist: str = Field(..., min_length=1, max_length=300)
     durationMs: Optional[int] = None
+    # True: queued behind this account's other queued songs (polyphony#164); else played now.
+    queued: bool = False
+
+
+class PriorityIn(BaseModel):
+    ids: list[str] = Field(default_factory=list, max_length=500)
 
 
 def _mine(stream_id: str, user: CurrentUser) -> dict:
@@ -46,12 +52,19 @@ async def start(body: PlayNowIn, user: CurrentUser = Depends(require_user)) -> d
         raise ApiError(409, "unavailable", "This server can't fetch songs to play right now.")
     row = playnow.start(user.id, body.musicBrainzRecordingId.lower(),
                         body.musicBrainzReleaseGroupId.lower() if body.musicBrainzReleaseGroupId else None,
-                        body.title, body.artist, body.durationMs)
+                        body.title, body.artist, body.durationMs, queued=body.queued)
     return playnow.view(row)
+
+
+@router.post("/priority")
+async def priority(body: PriorityIn, user: CurrentUser = Depends(require_user)) -> dict:
+    """The order the app will play its queued Play now songs in (soonest first): fetched in it."""
+    return {"updated": playnow.prioritise(user.id, body.ids)}
 
 
 @router.get("/{stream_id}")
 async def status(stream_id: str, user: CurrentUser = Depends(require_user)) -> dict:
+    playnow.kick(user.id)
     return playnow.view(_mine(stream_id, user))
 
 
