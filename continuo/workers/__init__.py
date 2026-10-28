@@ -7,6 +7,11 @@ from ..requests import tracks
 from . import heartbeat, reconcile, registry, scan, status
 
 
+async def _warm_discover() -> None:
+    from ..search import discover
+    await discover.warm()
+
+
 def start() -> list[asyncio.Task]:
     # Intervals are read each iteration, so a config.reload() (tests) takes effect.
     loops = {
@@ -17,6 +22,8 @@ def start() -> list[asyncio.Task]:
         "nightly": (lambda: 600, heartbeat.nightly),
         "libraries": (lambda: config.settings.library_sync_seconds, links.tick),
         "tracks": (lambda: config.settings.track_poll_seconds, tracks.tick),
+        # Discovery pages built ahead (Explore, Home): checked every 20 min, rebuilt when 2.5 h old.
+        "discover": (lambda: 1200, _warm_discover),
     }
     tasks = []
     for name, (interval, body) in loops.items():

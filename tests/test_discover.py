@@ -154,3 +154,24 @@ def test_seeds_come_from_what_you_play_on_last_fm(monkeypatch, fake):
     monkeypatch.setattr(scrobble, "lastfm_top_artists", scrobble.lastfm_top_artists)
     picks, _yours = asyncio.run(discover._similar([], u["id"]))
     assert picks == [("new-1", "Cleo Sol")] and set(asked) <= {"js-mbid", "ls-mbid"} and asked
+
+
+def test_pages_are_built_ahead_and_again_before_they_expire(monkeypatch, fake):
+    from continuo.db import users
+    built = []
+
+    async def build(user_id, limit):
+        built.append(user_id)
+        return {"n": len(built)}
+    monkeypatch.setattr(discover, "_build", build)
+    discover._built_at.clear()
+    a = users.create("isaac", "x", "admin")
+    b = users.create("guest", "x", "user")
+    asyncio.run(discover.warm())
+    assert sorted(built) == sorted([a["id"], b["id"]]), "every account's page, before anyone asks"
+    asyncio.run(discover.warm())
+    assert len(built) == 2, "not again while fresh"
+    discover._built_at[(a["id"], 12)] -= discover._WARM_AFTER_S + 1
+    asyncio.run(discover.warm())
+    assert built[-1] == a["id"] and len(built) == 3, "rebuilt before the cache runs out"
+    assert asyncio.run(discover.page(a["id"])) == {"n": 3}, "served from what was built"

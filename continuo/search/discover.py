@@ -12,6 +12,7 @@ Lidarr's artist search (no rate limit)."""
 import asyncio
 import logging
 import re
+import time
 from datetime import date, timedelta
 from typing import Optional
 
@@ -34,6 +35,9 @@ _history_cache = TTLCache(6 * 3600.0, max_items=64)
 # The last page built for each account, served while a fresh one is built (see page).
 _last_page: dict = {}
 _rebuilding: set = set()
+# When each account's page was last built (monotonic), for warm().
+_built_at: dict = {}
+_WARM_AFTER_S = 2.5 * 3600         # rebuilt before the page cache's 3 h run out
 _WARM_AT_ONCE = 4
 _FRESH_DAYS = 90
 _SEEDS = 3
@@ -380,6 +384,24 @@ async def _rebuild(key) -> dict:
         value = await _build(*key)
         _page_cache.put(key, value)
         _last_page[key] = value
+        _built_at[key] = time.monotonic()
         return value
     finally:
         _rebuilding.discard(key)
+
+
+async def warm(limit: int = 12) -> None:
+    """The discover loop: build each account's page before it's asked for (startup) and again
+    before it expires, one account at a time, so Explore and Home never wait for the seconds a
+    build takes."""
+    from ..db import users as users_db
+    for u in users_db.list_all():
+        key = (u["id"], limit)
+        if key in _rebuilding or time.monotonic() - _built_at.get(key, -1e9) < _WARM_AFTER_S:
+            continue
+        _rebuilding.add(key)
+        try:
+            await _rebuild(key)
+        except (httpx.HTTPError, ValueError) as e:
+            log.warning("discover: warming %s failed: %s", u.get("username"), e)
+
