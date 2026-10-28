@@ -118,8 +118,15 @@ def _redirect_target(current: httpx.URL, location: str) -> httpx.URL:
     return url
 
 
+_DEEZER_SIZE = re.compile(r"/(\d+)x(\d+)-")
+
+
 def sized(url: httpx.URL, size: Optional[int]) -> httpx.URL:
-    """Pick the Cover Art Archive thumbnail nearest above `size`; other sources as they are."""
+    """Pick the Cover Art Archive thumbnail nearest above `size`, or ask Deezer's image CDN for
+    that size (its paths carry it: …/500x500-000000-80-0-0.jpg); other sources as they are."""
+    if size and url.host.lower().endswith("dzcdn.net") and _DEEZER_SIZE.search(url.path):
+        px = min(max(size, 56), 1000)
+        return url.copy_with(path=_DEEZER_SIZE.sub(f"/{px}x{px}-", url.path, count=1))
     if not size or url.host.lower() != "coverartarchive.org":
         return url
     m = _CAA_PATH.match(url.path)

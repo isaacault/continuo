@@ -143,6 +143,9 @@ def test_size_picks_a_caa_thumbnail(client, fake):
     assert str(artwork.sized(httpx.URL(CAA), 5000)).endswith("/front-1200")
     lidarr_img = httpx.URL("https://images.lidarr.audio/cache/abc.jpg")
     assert artwork.sized(lidarr_img, 250) == lidarr_img
+    deezer = httpx.URL("https://cdn-images.dzcdn.net/images/cover/327e/500x500-000000-80-0-0.jpg")
+    assert str(artwork.sized(deezer, 320)).endswith("/327e/320x320-000000-80-0-0.jpg")
+    assert artwork.sized(deezer, None) == deezer
 
 
 def test_missing_art_is_remembered(client, fake):
