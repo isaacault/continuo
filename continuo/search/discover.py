@@ -21,7 +21,7 @@ import httpx
 from ..db import library as lib_db
 from ..db import requests as req_db
 from ..requests.normalise import normalise
-from ..upstream import lidarr, listenbrainz
+from ..upstream import lidarr, listenbrainz, musicbrainz
 from . import merge
 from .cache import TTLCache, cached
 
@@ -78,9 +78,12 @@ def new_from(albums: list[dict], fresh: list[dict], limit: int) -> list[dict]:
     out, seen = [], set()
     for x in sorted(fresh, key=lambda x: x.get("release_date") or "", reverse=True):
         rg = x.get("release_group_mbid")
-        if not rg or rg in have or rg in seen or not (credited(x.get("artist_credit_name")) & yours):
+        # Once per release group, and per title and artist: MusicBrainz can hold the same single
+        # twice ("Staring at the Sun" and "Staring At The Sun").
+        same = (normalise(x.get("release_name")), normalise(_CREDIT_SPLIT.split(x.get("artist_credit_name") or "")[0]))
+        if not rg or rg in have or rg in seen or same in seen or not (credited(x.get("artist_credit_name")) & yours):
             continue
-        seen.add(rg)
+        seen.update((rg, same))
         day = x.get("release_date") or ""
         out.append({"kind": "album", "title": x.get("release_name"), "artist": x.get("artist_credit_name"),
                     "year": int(day[:4]) if day[:4].isdigit() else None,
@@ -214,15 +217,54 @@ async def _artist_picture(name: str) -> Optional[str]:
     return await cached(_artist_art_cache, normalise(name), look) or None
 
 
+async def _deezer_cover(title: str, artist: str) -> Optional[str]:
+    """The release's cover from Deezer (with ranked search on): it has new releases on the day,
+    before the Cover Art Archive does. Only an exact title by the same lead artist counts."""
+    from .. import config
+    from ..upstream import deezer
+    if not config.settings.search_deezer:
+        return None
+    try:
+        hits = await deezer.search_albums(f"{artist} {title}", 5)
+    except (deezer.Exhausted, httpx.HTTPError, ValueError):
+        return None
+    want, by = normalise(title), normalise(_CREDIT_SPLIT.split(artist)[0])
+    return next((h.get("cover") for h in hits if normalise(h["title"]) == want
+                 and normalise(_CREDIT_SPLIT.split(h["artist"])[0]) == by and h.get("cover")), None)
+
+
+async def _deezer_picture(name: str) -> Optional[str]:
+    from .. import config
+    from ..upstream import deezer
+    if not config.settings.search_deezer:
+        return None
+    try:
+        return next((a.get("picture") for a in await deezer.search_artists(name, 3)
+                     if normalise(a["name"]) == normalise(name) and a.get("picture")), None)
+    except (deezer.Exhausted, httpx.HTTPError, ValueError):
+        return None
+
+
 async def _with_covers(albums: list[dict]) -> list[dict]:
-    """Brand-new releases often have no cover anywhere yet (Cover Art Archive, Lidarr, Deezer
-    checked): those show their artist's picture instead of a blank."""
+    """Brand-new releases often have no Cover Art Archive cover yet: those take Deezer's cover
+    of the release, else their artist's picture (Deezer's, else Lidarr's), instead of a blank."""
     async def one(a: dict) -> dict:
         if a.get("imageUrl"):
             return a
         lead = _CREDIT_SPLIT.split(a.get("artist") or "")[0].strip()
-        return {**a, "imageUrl": await _artist_picture(lead)} if lead else a
+        if not lead:
+            return a
+        picture = await _deezer_cover(a.get("title") or "", a.get("artist") or "") \
+            or await _deezer_picture(lead) or await _artist_picture(lead)
+        return {**a, "imageUrl": picture}
     return list(await asyncio.gather(*(one(a) for a in albums)))
+
+
+async def _prefetch_tracklists(release_groups: list[str]) -> None:
+    """Fetch the page's albums' tracklists into MusicBrainz's cache (one at a time: it's paced to
+    a call a second), so opening one shows its songs at once instead of after seconds."""
+    for rg in dict.fromkeys(r for r in release_groups if r):
+        await musicbrainz.album_tracks(rg)
 
 
 async def _warm(sources: list[str]) -> None:
@@ -324,6 +366,10 @@ async def _build(user_id: Optional[int], limit: int) -> dict:
     requests = req_db.active_by_release_group()
     cat_new = await _with_covers(new_from(albums, fresh, limit))
     task = asyncio.get_running_loop().create_task(_warm([a.get("imageUrl") for a in cat_new + artist_tiles + album_tiles]))
+    _warming.add(task)
+    task.add_done_callback(_warming.discard)
+    task = asyncio.get_running_loop().create_task(_prefetch_tracklists(
+        [a.get("musicBrainzReleaseGroupId") for a in cat_new + album_tiles]))
     _warming.add(task)
     task.add_done_callback(_warming.discard)
     # Already in the library under another release group (a reissue matched by name): left out.

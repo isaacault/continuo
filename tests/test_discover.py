@@ -175,3 +175,19 @@ def test_pages_are_built_ahead_and_again_before_they_expire(monkeypatch, fake):
     asyncio.run(discover.warm())
     assert built[-1] == a["id"] and len(built) == 3, "rebuilt before the cache runs out"
     assert asyncio.run(discover.page(a["id"])) == {"n": 3}, "served from what was built"
+
+
+
+def test_the_same_release_twice_shows_once():
+    twice = [dict(FRESH[1]), dict(FRESH[1], release_group_mbid="rg-sun-2", release_name="Staring At The Sun")]
+    assert [a["title"] for a in discover.new_from(YOURS, twice, limit=10)] == ["Staring at the Sun"]
+
+
+def test_a_new_release_without_a_cover_takes_deezer_s(monkeypatch):
+    from continuo.upstream import deezer
+
+    async def albums(q, limit=10):
+        return [{"title": "Outsiders", "artist": "Juice WRLD", "recordType": "album", "cover": "https://cdn-images.dzcdn.net/o.jpg"}]
+    monkeypatch.setattr(deezer, "search_albums", albums)
+    out = asyncio.run(discover._with_covers([{"title": "Outsiders", "artist": "Juice WRLD", "imageUrl": None}]))
+    assert out[0]["imageUrl"] == "https://cdn-images.dzcdn.net/o.jpg"
