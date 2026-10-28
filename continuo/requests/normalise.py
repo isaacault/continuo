@@ -8,6 +8,11 @@ _QUOTES = str.maketrans({
     "“": '"', "”": '"', "„": '"', "″": '"',
     "‐": "-", "‑": "-", "‒": "-", "–": "-", "—": "-", "―": "-",
 })
+# Letters with no accent to strip, spelled the way files and catalogues write them in ASCII:
+# "Einhvers Staðar" is "Einhvers Stadar" in half the folders on Soulseek.
+_LETTERS = str.maketrans({
+    "ð": "d", "đ": "d", "þ": "th", "ø": "o", "æ": "ae", "œ": "oe", "ł": "l", "ı": "i",
+})
 _AND = re.compile(r"\s*(&|\+|\band\b)\s*")
 _NON_ALNUM = re.compile(r"[\W_]+", re.UNICODE)
 _LEADING_THE = re.compile(r"^the ")
@@ -20,8 +25,9 @@ _EDITION = re.compile(
 
 
 def normalise(s: str | None) -> str:
-    """NFKC, curly→straight quotes, '&'/'+'→'and', strip punctuation/whitespace, casefold.
-    Letters outside ASCII are kept (so non-Latin titles don't all collapse to '')."""
+    """NFKC, curly→straight quotes, '&'/'+'→'and', strip punctuation/whitespace, casefold,
+    accents off and ð/þ/ø/æ/ł spelled out. Other letters outside ASCII are kept (so non-Latin
+    titles don't all collapse to '')."""
     if not s:
         return ""
     s = unicodedata.normalize("NFKC", s).translate(_QUOTES).casefold()
@@ -29,7 +35,7 @@ def normalise(s: str | None) -> str:
     s = _LEADING_THE.sub("", s.strip())
     # Drop combining marks so "Sigur Rós" == "Sigur Ros".
     s = "".join(ch for ch in unicodedata.normalize("NFKD", s) if not unicodedata.combining(ch))
-    return _NON_ALNUM.sub("", s)
+    return _NON_ALNUM.sub("", s.translate(_LETTERS))
 
 
 def strip_edition(title: str | None) -> str:
