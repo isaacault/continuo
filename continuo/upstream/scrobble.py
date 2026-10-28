@@ -104,3 +104,36 @@ async def lastfm(session_key: str, song: dict, listened_at: Optional[int]) -> No
         await _lastfm("track.scrobble", {**params, "timestamp": str(listened_at)}, post=True)
     else:
         await _lastfm("track.updateNowPlaying", params, post=True)
+
+
+# ---- listening history, for discovery ---------------------------------------------------------
+
+async def lastfm_top_artists(user: str, limit: int = 30) -> list[tuple[str, Optional[str]]]:
+    """[user]'s most played artists on Last.fm over the last six months, most played first:
+    [(name, MusicBrainz ID or None)]; [] without the server's key or when Last.fm fails."""
+    if not lastfm_available():
+        return []
+    try:
+        r = await _fm().get(_LASTFM, params={"method": "user.gettopartists", "user": user, "period": "6month",
+                                             "limit": limit, "api_key": config.settings.lastfm_api_key, "format": "json"})
+        r.raise_for_status()
+        artists = (r.json().get("topartists") or {}).get("artist") or []
+    except (httpx.HTTPError, ValueError) as e:
+        log.warning("lastfm: top artists failed: %s", e.__class__.__name__)
+        return []
+    return [(a["name"], a.get("mbid") or None) for a in artists if a.get("name")]
+
+
+async def listenbrainz_top_artists(user: str, limit: int = 30) -> list[tuple[str, Optional[str]]]:
+    """[user]'s most listened artists on ListenBrainz over the last six months; [] when it has none."""
+    try:
+        r = await _lb().get(f"/stats/user/{user}/artists", params={"range": "half_yearly", "count": limit})
+        if r.status_code == 204:
+            return []
+        r.raise_for_status()
+        artists = (r.json().get("payload") or {}).get("artists") or []
+    except (httpx.HTTPError, ValueError) as e:
+        log.warning("listenbrainz: top artists failed: %s", e.__class__.__name__)
+        return []
+    return [(a["artist_name"], (a.get("artist_mbids") or [None])[0] or a.get("artist_mbid")) for a in artists if a.get("artist_name")]
+
