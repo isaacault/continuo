@@ -13,6 +13,8 @@ import shutil
 import uuid
 from typing import Optional
 
+import httpx
+
 from .. import config
 from ..db import cache as cache_db
 from ..db import streams as streams_db
@@ -281,3 +283,28 @@ def keep(user: dict, stream_id: str) -> dict:
                                               "refetch": not good})
     streams_db.update(stream_id, tried={**(row.get("tried") or {}), "kept": True})
     return req
+
+
+async def scrobble(user_id: int, row: dict, listened_at: Optional[int]) -> list[str]:
+    """Send a Play now song's listen ([listened_at]) or now-playing to the account's linked
+    services; the ones it reached."""
+    from ..db import scrobblers
+    from ..upstream import scrobble as sc
+    song = {"artist": row.get("artist") or "", "title": row.get("title") or "", "durationMs": row.get("duration_ms"),
+            "recordingMbid": row.get("recording_id")}
+    if not song["artist"] or not song["title"]:
+        return []
+    sent = []
+    for service, link in scrobblers.all_for(user_id).items():
+        try:
+            if service == "listenbrainz":
+                await sc.listenbrainz(link["secret"], song, listened_at)
+            elif service == "lastfm" and sc.lastfm_available():
+                await sc.lastfm(link["secret"], song, listened_at)
+            else:
+                continue
+            sent.append(service)
+        except (httpx.HTTPError, sc.Refused, ValueError) as e:
+            log.warning("play now %s: scrobbling to %s failed: %s", row["id"], service, e.__class__.__name__)
+    return sent
+

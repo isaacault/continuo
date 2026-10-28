@@ -17,6 +17,7 @@ from .api import (
     notifications,
     playnow,
     requests,
+    scrobbling,
     search,
     subsonic,
 )
@@ -112,7 +113,7 @@ def create_app(*, disable_workers: bool = False) -> FastAPI:
 
     for r in (health.router, auth.router, search.router, requests.router,
               notifications.router, admin.router, internal.router, artwork.router, library.router,
-              playnow.router, subsonic.router):
+              playnow.router, scrobbling.router, subsonic.router):
         app.include_router(r)
     return app
 

@@ -122,6 +122,9 @@ class Settings:
     # ListenBrainz user token: only its popularity data (an artist's top songs) needs one; the
     # rest of the artist page works without. Empty = no top songs.
     listenbrainz_token: str = ""
+    # Last.fm, for scrobbling Play now songs (the same key Navidrome uses for library songs).
+    lastfm_api_key: str = ""
+    lastfm_secret: str = ""
     # Search ranked by Deezer's public search (search.ranked); off: MusicBrainz's search alone.
     search_deezer: bool = True
 
@@ -250,6 +253,8 @@ def load(env: dict | None = None) -> Settings:
         musicbrainz_contact=_str(e, "MUSICBRAINZ_CONTACT", "https://github.com/isaacault/continuo"),
         listenbrainz_token=_str(e, "LISTENBRAINZ_TOKEN"),
         search_deezer=_bool(e, "SEARCH_DEEZER", True),
+        lastfm_api_key=_str(e, "LASTFM_API_KEY"),
+        lastfm_secret=_str(e, "LASTFM_SECRET"),
         music_dir=_url(e, "MUSIC_DIR"),  # a path; _url only trims the trailing slash
         library_removal_role=_str(e, "LIBRARY_REMOVAL_ROLE", "admin").lower(),
         name_locale=_str(e, "NAME_LOCALE", "en").lower(),
