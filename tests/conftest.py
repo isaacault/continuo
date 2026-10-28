@@ -88,6 +88,7 @@ def fake(monkeypatch, tmp_path):
     discover._page_cache.clear()
     discover._last_page.clear()
     discover._slow_cache.clear()
+    discover._history_cache.clear()
     merge._quick_cache.clear()
     deezer.reset()
     pipeline._progress.clear()

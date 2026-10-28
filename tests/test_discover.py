@@ -125,3 +125,32 @@ def test_an_expired_page_is_served_while_a_fresh_one_is_built(monkeypatch):
         return first, stale, await discover.page(1)
     first, stale, fresh = asyncio.run(go())
     assert first == {"n": 1} and stale == {"n": 1} and fresh == {"n": 2}
+
+
+
+def test_seeds_come_from_what_you_play_on_last_fm(monkeypatch, fake):
+    import dataclasses
+
+    from continuo import config
+    from continuo.db import scrobblers, users
+    from continuo.upstream import scrobble
+    monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, lastfm_api_key="K", lastfm_secret="S"))
+    u = users.create("isaac", "x", "admin")
+    scrobblers.put(u["id"], "lastfm", "SK", "isaac_fm")
+    fake.on("GET", "https://ws.audioscrobbler.com/2.0/", {"topartists": {"artist": [
+        {"name": "Jorja Smith", "mbid": "js-mbid", "playcount": "300"}, {"name": "Little Simz", "mbid": "", "playcount": "200"}]}})
+    seeds = asyncio.run(discover.listening_seeds(u["id"]))
+    assert seeds == [("Jorja Smith", "js-mbid"), ("Little Simz", None)]
+    asked = []
+
+    async def similar(mbid, limit=15):
+        asked.append(mbid)
+        return [{"musicBrainzArtistId": "new-1", "name": "Cleo Sol"}]
+
+    async def search_artists(name):
+        return [{"name": name, "musicBrainzArtistId": "ls-mbid"}]
+    monkeypatch.setattr(listenbrainz, "similar_artists", similar)
+    monkeypatch.setattr(lidarr, "search_artists", search_artists)
+    monkeypatch.setattr(scrobble, "lastfm_top_artists", scrobble.lastfm_top_artists)
+    picks, _yours = asyncio.run(discover._similar([], u["id"]))
+    assert picks == [("new-1", "Cleo Sol")] and set(asked) <= {"js-mbid", "ls-mbid"} and asked

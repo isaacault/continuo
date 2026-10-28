@@ -30,6 +30,7 @@ _fresh_cache = TTLCache(6 * 3600.0, max_items=2)
 _page_cache = TTLCache(3 * 3600.0, max_items=64)
 _artist_art_cache = TTLCache(24 * 3600.0, max_items=512)
 _slow_cache = TTLCache(24 * 3600.0, max_items=512)
+_history_cache = TTLCache(6 * 3600.0, max_items=64)
 # The last page built for each account, served while a fresh one is built (see page).
 _last_page: dict = {}
 _rebuilding: set = set()
@@ -98,6 +99,10 @@ async def _artist_mbid(name: str) -> Optional[str]:
     return next((h["musicBrainzArtistId"] for h in hits if normalise(h.get("name")) == want), None)
 
 
+async def _given(mbid: str) -> str:
+    return mbid
+
+
 async def _mbid_or_blank(name: str) -> str:
     return await _artist_mbid(name) or ""
 
@@ -107,23 +112,48 @@ async def _similar_or_blank(mbid: str) -> list:
     return found if found is not None else []
 
 
-async def _similar(albums: list[dict]) -> tuple[list[tuple[str, str]], set[str]]:
-    """Artists like the account's most collected ones and not in its library, most alike first:
-    ([(mbid, name)], the account's artists, normalised)."""
+async def listening_seeds(user_id: Optional[int]) -> list[tuple[str, Optional[str]]]:
+    """The account's most played artists, from the listening history it scrobbles (Last.fm, else
+    ListenBrainz, for the accounts linked for scrobbling), most played first; [] without one.
+    Kept a few hours."""
+    from ..db import scrobblers
+    from ..upstream import scrobble
+    links = scrobblers.all_for(user_id) if user_id is not None else {}
+
+    async def look() -> list:
+        fm = (links.get("lastfm") or {}).get("account")
+        lb = (links.get("listenbrainz") or {}).get("account")
+        found = await scrobble.lastfm_top_artists(fm) if fm else []
+        if not found and lb:
+            found = await scrobble.listenbrainz_top_artists(lb)
+        return [list(x) for x in found]
+    if not links:
+        return []
+    return [tuple(x) for x in await cached(_history_cache, user_id, look)]
+
+
+async def _similar(albums: list[dict], user_id: Optional[int] = None) -> tuple[list[tuple[str, str]], set[str]]:
+    """Artists like the account's most played ones (its listening history, else its most collected
+    in the library) and not in its library, most alike first: ([(mbid, name)], the account's
+    library artists, normalised)."""
     counts: dict[str, tuple[int, str]] = {}
     for a in albums:
         if a.get("artist"):
             n, _ = counts.get(normalise(a["artist"]), (0, a["artist"]))
             counts[normalise(a["artist"])] = (n + 1, a["artist"])
-    # The most collected artists, rotating day by day among the top dozen so Home changes.
-    top = sorted(counts.items(), key=lambda kv: -kv[1][0])[:12]
+    # What's played most (else collected most), rotating day by day among the top dozen so the
+    # page changes.
+    played = await listening_seeds(user_id)
+    top = [(name, mbid) for name, mbid in played[:12]] or \
+        [(name, None) for _, (_, name) in sorted(counts.items(), key=lambda kv: -kv[1][0])[:12]]
     if not top:
         return [], set(counts)
     start = date.today().toordinal() % len(top)
-    seeds = [name for _, (_, name) in (top[start:] + top[:start])[:_SEEDS]]
+    seeds = (top[start:] + top[:start])[:_SEEDS]
     # Seeds' IDs and their similar artists change slowly: kept a day.
-    mbids = [m for m in await asyncio.gather(*(cached(_slow_cache, ("mbid", normalise(s)), lambda s=s: _mbid_or_blank(s))
-                                               for s in seeds)) if m]
+    mbids = [m for m in await asyncio.gather(*(
+        _given(mbid) if mbid else cached(_slow_cache, ("mbid", normalise(name)), lambda s=name: _mbid_or_blank(s))
+        for name, mbid in seeds)) if m]
     similar = await asyncio.gather(*(cached(_slow_cache, ("similar", m), lambda m=m: _similar_or_blank(m)) for m in mbids))
     yours = set(counts)
     score: dict[str, float] = {}
@@ -269,7 +299,7 @@ async def _playlists(user_id: Optional[int]) -> list[dict]:
 async def _build(user_id: Optional[int], limit: int) -> dict:
     albums = _your_albums(user_id)
     fresh_t = cached(_fresh_cache, "fresh", _fresh_releases)
-    picks, yours = await _similar(albums)
+    picks, yours = await _similar(albums, user_id)
     fresh, songs, artist_tiles, album_tiles, playlists = await asyncio.gather(
         fresh_t, _for_you(picks, yours, limit), _artist_tiles(picks[:_EXPLORE_ARTISTS]),
         _album_tiles(picks[:_EXPLORE_ALBUMS]), _playlists(user_id), return_exceptions=True)
