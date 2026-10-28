@@ -6,6 +6,7 @@ win; a catalogue hit that resolves to a library album folds into it.
 """
 import asyncio
 import logging
+import math
 import unicodedata
 from typing import Optional
 
@@ -457,7 +458,7 @@ async def unified_search(q: str, types: tuple[str, ...], limit: int,
     if "track" in want:
         results += merge_tracks(library["song"], cat_tracks, index, requests, limit, req_db.active_tracks())
     return {"query": q, "sources": sources, "results": results, "ranked": bool(ranked_cat),
-            "best": lead(q, results, ranked_cat.get("best"))}
+            "best": lead(q, results, ranked_cat.get("best")), "popularity": ranked_cat.get("popularity") or {}}
 
 
 # ---- quick search: the top few, fast, while typing ----------------------------------------------
@@ -541,7 +542,10 @@ async def _quick_catalog(q: str, limit: int) -> dict:
                                  "musicBrainzReleaseGroupId": album["musicBrainzReleaseGroupId"] if album else None,
                                  "year": album["year"] if album else None, "albumType": album["albumType"] if album else None},
                        "imageUrl": album["imageUrl"] if album else None})
-    return {"artists": artists, "albums": albums, "tracks": tracks, "complete": not slow}
+    # Popularity on ranked search's log scale, for blended: the artists' ListenBrainz listens.
+    popularity = {f"mb:artist:{a['musicBrainzArtistId']}": round(math.log10(listens.get(a["musicBrainzArtistId"], 0) + 1), 2)
+                  for a in artists}
+    return {"artists": artists, "albums": albums, "tracks": tracks, "complete": not slow, "popularity": popularity}
 
 
 async def _ranked(q: str, limit: int) -> Optional[dict]:
@@ -556,6 +560,43 @@ async def _ranked(q: str, limit: int) -> Optional[dict]:
     except (deezer.Exhausted, httpx.HTTPError, ValueError) as e:
         log.info("search: ranked catalogue unavailable (%s), MusicBrainz's instead", e.__class__.__name__)
         return None
+
+
+# A library hit the catalogue doesn't know gets this popularity (log10 scale): yours, so it counts.
+_LIBRARY_POP = 4.5
+# Within a list, popularity weighs more than in choosing the page's lead (ranked.score): a much
+# bigger name a little further from what was typed comes first (Sabrina Salerno before the
+# artist called Sabrina), as Spotify's lists do.
+_BLEND_POP_WEIGHT = 0.75
+
+
+def blended(q: str, results: list[dict], popularity: dict, limit: int) -> list[dict]:
+    """[results], each kind in one order, library and catalogue together: how well a hit's own
+    name is what was typed, then its popularity, a little more for one of yours; each once
+    (by key, and by name and artist), [limit] of each kind. A library hit that matched on someone else's name ("Miss Me
+    (feat. Lil Wayne)" for "lil") sinks below the catalogue's Lil Peep instead of crowding it out."""
+    from .ranked import match, song_match
+
+    def score(r: dict) -> float:
+        name = r.get("name") or r.get("title")
+        m = song_match(q, name or "", r.get("artist") or "") if r["kind"] == "track" else match(q, name)
+        mine = (r.get("availability") or {}).get("state") == "in_library"
+        pop = popularity.get(r["key"], _LIBRARY_POP if mine else 0.0)
+        return m + _BLEND_POP_WEIGHT * pop + (0.3 if mine else 0.0)
+    out: list[dict] = []
+    for kind in ("album", "artist", "track"):
+        # Once per key, and per name and artist: the store's copy and an account's own library
+        # copy of an album are two hits with two ids.
+        seen: set = set()
+        kept = []
+        for r in sorted((r for r in results if r["kind"] == kind), key=score, reverse=True):
+            same = (normalise(r.get("name") or r.get("title")), normalise(r.get("artist")))
+            if r["key"] in seen or same in seen:
+                continue
+            seen.update((r["key"], same))
+            kept.append(r)
+        out += kept[:limit]
+    return out
 
 
 def lead(q: str, results: list[dict], catalog_best: Optional[str]) -> Optional[str]:
@@ -608,10 +649,15 @@ async def quick_search(q: str, navidrome_user: str, user_id: Optional[int] = Non
         catalog = {"artists": [], "albums": [], "tracks": []}
     index = _LibraryIndex(lib_db.all_albums(), user_id)
     requests = req_db.active_by_release_group()
-    results = (merge_albums(library["album"], catalog["albums"], index, requests, limit)
-               + merge_artists(library["artist"], catalog["artists"], limit)
-               + merge_tracks(library["song"], catalog["tracks"], index, requests, limit, req_db.active_tracks()))
+    # Merged with room for everything, then each kind ordered and cut (blended): the library's
+    # matches don't crowd out the catalogue's.
+    room = limit + len(library["album"]) + len(library["artist"]) + len(library["song"])
+    merged = (merge_albums(library["album"], catalog["albums"], index, requests, room)
+              + merge_artists(library["artist"], catalog["artists"], room)
+              + merge_tracks(library["song"], catalog["tracks"], index, requests, room, req_db.active_tracks()))
+    results = blended(q, merged, catalog.get("popularity") or {}, limit)
     return {"query": q, "sources": sources, "results": results, "partial": True,
             # Both quick catalogues come most listened first (the fallback by ListenBrainz's
             # listens): the order stands either way.
-            "ranked": True, "best": lead(q, results, catalog.get("best"))}
+            "ranked": True, "best": lead(q, results, catalog.get("best")),
+            "popularity": catalog.get("popularity") or {}}

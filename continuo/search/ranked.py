@@ -34,6 +34,8 @@ _SONGS_LOOKED_UP = 10
 _ID_BUDGET_S = 1.4
 _ALBUM_POOL = 6
 _LOOKUPS = 4
+# Artists lead a search page (Spotify's "lil": Lil Peep, Lil Wayne, Lil Uzi Vert…): a few more.
+_ARTIST_LOOKUPS = 6
 # What doesn't change from one keystroke to the next, kept a day: ListenBrainz allows 30 calls in
 # 10 s, and "s", "sa", "sab" find many of the same songs, artists and albums.
 _ids_cache = TTLCache(24 * 3600.0, max_items=8192)
@@ -234,7 +236,7 @@ async def catalog(q: str, limit: int) -> dict:
         deezer.search_tracks(q, 25), deezer.search_artists(q, 10), deezer.search_albums(q, 10))
     artist_pool, album_pool = pools(q, tracks, raw_artists, raw_albums)
     # Only the likeliest few get looked up: Lidarr takes its lookups more or less one at a time.
-    artist_pool = sorted(artist_pool, key=lambda a: -score(match(q, a["name"]) or 0.5, _artist_pop(a)))[:_LOOKUPS]
+    artist_pool = sorted(artist_pool, key=lambda a: -score(match(q, a["name"]) or 0.5, _artist_pop(a)))[:_ARTIST_LOOKUPS]
     album_pool = sorted(album_pool, key=lambda b: -match(q, b["title"]))[:_LOOKUPS]
     # IDs, all at once: the songs' through ListenBrainz, artists' and albums' through Lidarr,
     # each within a budget (a hit without IDs is left out).
@@ -279,8 +281,12 @@ async def catalog(q: str, limit: int) -> dict:
                    "imageUrl": b.get("cover"), "musicBrainzReleaseGroupId": b["ids"]["rg"],
                    "musicBrainzArtistId": b["ids"]["artist"], "releaseIds": [], "owned": False, "trackCount": None,
                    "lidarrAlbumId": None} for b in albums[:limit]]
+    # Each hit's popularity (log10 scale, see score) for clients that blend kinds into one list.
+    popularity = {f"mb:artist:{a['mbid']}": round(_artist_pop(a), 2) for a in artists[:limit]}
+    popularity.update({f"mb:rg:{b['ids']['rg']}": round(math.log10(b_pop.get(b["ids"]["rg"], 0) + 1), 2) for b in albums[:limit]})
+    popularity.update({f"mb:rec:{s['musicBrainzRecordingId']}": round(_song_pop(rank_of.get(s["_deezer"], 0)), 2) for s in songs[:limit]})
     for s in songs:
         s.pop("_deezer", None)
         s.pop("_lead", None)
     return {"artists": out_artists, "albums": out_albums, "tracks": songs[:limit],
-            "best": top[1] if top and top[0] > 0 else None}
+            "best": top[1] if top and top[0] > 0 else None, "popularity": popularity}
