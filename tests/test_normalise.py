@@ -23,3 +23,13 @@ def test_edition_suffixes_are_stripped_for_keys():
     assert strip_edition("Live at the BBC (Part 1)") == "Live at the BBC (Part 1)"
     assert album_key("Boards of Canada", "Geogaddi (Deluxe)") == album_key("boards of canada",
                                                                            "Geogaddi")
+
+
+def test_letters_without_accents_are_spelled_out():
+    # Alaskan Tapes' "Einhvers Staðar" is "Einhvers Stadar" in many Soulseek folders.
+    assert normalise("Einhvers Staðar") == normalise("Einhvers Stadar")
+    assert normalise("Þórr") == normalise("Thorr")
+    assert normalise("Røyksopp") == normalise("Royksopp")
+    assert normalise("Ærøskøbing") == normalise("Aeroskobing")
+    assert normalise("Łódź") == normalise("Lodz")
+    assert normalise("Straße") == normalise("Strasse")
