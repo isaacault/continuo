@@ -4,9 +4,10 @@ follow it. Lidarr only deals in whole albums, so single songs come straight from
 Policies: `library` (a song added to the library) prefers formats in Soularr's own order
 (`allowed_filetypes`, e.g. "flac,mp3 320"), then a free upload slot and a short queue;
 `fastest` (Play now, which isn't kept in the library unless asked) takes any decent copy, lossless
-or lossy at FAST_MIN_KBPS and up, whatever the library's formats, and puts the one that arrives
-soonest first: a free slot, a short queue, then the least time to download (size over the peer's
-upload speed), so a 320 kbps MP3 (8 MB) beats a 90 MB FLAC from the same kind of peer."""
+or lossy at FAST_MIN_KBPS and up, whatever the library's formats, and puts the one that plays
+soonest first: a free slot, a short queue, then the least time to reach the phone (to continuo at
+the peer's speed, then on to the phone), then the smaller: between equally fast peers the smaller
+copy wins at every quality (an MP3 over a FLAC, a 256 kbps over a 320)."""
 import asyncio
 import logging
 import re
@@ -96,9 +97,18 @@ def _decent(c: Candidate) -> bool:
     return kbps is None or kbps >= FAST_MIN_KBPS
 
 
+# The second hop, continuo to the phone, as a rough rate (a phone on mobile data, or Wi-Fi in
+# another room): what the peer's speed leaves out, and why a smaller copy wins between peers that
+# are equally fast.
+PHONE_BYTES_PER_S = 1_500_000
+
+
 def download_s(c: Candidate) -> float:
-    """Seconds this copy should take to arrive whole, from its size and the peer's upload speed."""
-    return c.size / max(c.upload_speed, 1) if c.size else float("inf")
+    """Seconds this copy should take to reach the phone whole: from the peer to continuo (its
+    size over the peer's upload speed), then on to the phone (its size over PHONE_BYTES_PER_S)."""
+    if not c.size:
+        return float("inf")
+    return c.size / max(c.upload_speed, 1) + c.size / PHONE_BYTES_PER_S
 
 
 def score(c: Candidate, artist: str, title: str, duration_ms: Optional[int], policy: str,
@@ -119,7 +129,7 @@ def score(c: Candidate, artist: str, title: str, duration_ms: Optional[int], pol
     title_words = set(_VARIANTS.findall(title.lower()))
     variant = any(v not in title_words for v in _VARIANTS.findall(c.basename.lower()))
     if policy == FASTEST:
-        return (variant, not c.free_slot, c.queue_length, download_s(c))
+        return (variant, not c.free_slot, c.queue_length, download_s(c), c.size)
     return (variant, rank, not c.free_slot, c.queue_length, -c.upload_speed)
 
 
