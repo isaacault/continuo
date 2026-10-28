@@ -142,3 +142,19 @@ def test_play_now_skips_lossy_copies_too_poor_to_hear():
     poor = [_resp("128", [_f(r"@@a\Peach Pit\Shampoo Bottles.mp3", kbps=128, length=212, size=3_400_000)]),
             _resp("tiny", [_f(r"@@b\Peach Pit\Shampoo Bottles.ogg", length=212, size=2_000_000)])]
     assert soulseek.best(poor, "Peach Pit", "Shampoo Bottles", 212_000, soulseek.FASTEST, FORMATS) is None
+
+
+
+def test_between_equally_fast_peers_the_smaller_copy_wins_at_every_quality():
+    def copy(user, ext, kbps, size):
+        return _resp(user, [_f(rf"@@{user}\Peach Pit\Shampoo Bottles.{ext}", kbps=kbps, length=212, size=size)], speed=5_000_000)
+    flac, mp3_320, mp3_256 = copy("flac", "flac", None, 25_000_000), copy("m320", "mp3", 320, 8_500_000), copy("m256", "mp3", 256, 6_800_000)
+    assert soulseek.best([flac, mp3_320, mp3_256], "Peach Pit", "Shampoo Bottles", 212_000, soulseek.FASTEST, FORMATS).username == "m256"
+    assert soulseek.best([flac, mp3_320], "Peach Pit", "Shampoo Bottles", 212_000, soulseek.FASTEST, FORMATS).username == "m320"
+
+
+def test_a_much_faster_peer_still_wins_with_a_bigger_copy():
+    quick_flac = _resp("fast", [_f(r"@@a\Peach Pit\Shampoo Bottles.flac", length=212, size=25_000_000)], speed=50_000_000)
+    slow_mp3 = _resp("slow", [_f(r"@@b\Peach Pit\Shampoo Bottles.mp3", kbps=320, length=212, size=8_500_000)], speed=200_000)
+    # 25 MB: 0.5 s to continuo + 16.7 s to the phone; 8.5 MB: 42.5 s to continuo + 5.7 s.
+    assert soulseek.best([quick_flac, slow_mp3], "Peach Pit", "Shampoo Bottles", 212_000, soulseek.FASTEST, FORMATS).username == "fast"
