@@ -133,7 +133,15 @@ def test_nobody_has_it(world):
     isaac = make_user()
     world["state"]["responses"] = []
     row = _run(isaac["id"])
-    assert row["status"] == "failed" and "Nobody" in row["error"]
+    assert row["status"] == "failed" and "Couldn't find" in row["error"]
+
+
+def test_nobody_could_send_it(world):
+    isaac = make_user()
+    world["state"]["responses"] = [_hit("stavriani")]
+    world["state"]["transfer"]["stavriani"] = {"state": "Completed, Rejected", "id": "t1"}
+    row = _run(isaac["id"])
+    assert row["status"] == "failed" and "Nobody on Soulseek could send" in row["error"]
 
 
 def test_the_audio_is_served_with_ranges(client, world):

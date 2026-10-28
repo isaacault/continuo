@@ -187,7 +187,11 @@ async def _fetch(stream_id: str) -> None:
             return
         if outcome == "rejected":
             refused.add(best.username)
-    streams_db.update(stream_id, status="failed", error="Nobody on Soulseek could send this song right now.")
+    # Nothing to try reads differently from copies that wouldn't come: three of four failures so
+    # far tried no copy at all, and "nobody could send" pointed at the peers.
+    error = ("Nobody on Soulseek could send this song right now." if tried
+             else "Couldn't find this song on Soulseek. A request keeps looking for it.")
+    streams_db.update(stream_id, status="failed", error=error)
 
 
 async def _follow(stream_id: str) -> str:
