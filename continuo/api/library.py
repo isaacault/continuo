@@ -54,6 +54,29 @@ async def album_tracklist(request: Request, navidrome_id: str, user: CurrentUser
     return {"musicBrainzReleaseGroupId": rg, "tracks": await musicbrainz.album_tracks(rg)}
 
 
+@router.get("/singles")
+async def singles(user: CurrentUser = Depends(require_user)) -> dict:
+    """The account's library albums that hold single songs rather than the album (songs requested
+    or kept one at a time, filed under _singles): {albums: [{navidromeAlbumId, have, expected}]}.
+    The app shows them under Songs, and under Albums and Artists only when asked."""
+    from ..db import library as lib_db
+    from ..library.singles import Singles, is_singles
+    from ..search import merge
+    index = merge._LibraryIndex(lib_db.all_albums(), user.id)
+    counts = Singles()
+    out = []
+    for album in index.by_id.values():
+        if not is_singles(album.get("folder")):
+            continue
+        mine = index.mine(album)
+        if mine is None or any(o["navidromeAlbumId"] == mine for o in out):
+            continue
+        have = int(album.get("song_count") or 1)
+        out.append({"navidromeAlbumId": mine, "have": have,
+                    "expected": max(counts.expected.get(album.get("folder") or "", 0), have)})
+    return {"albums": out}
+
+
 @router.get("/lyrics")
 async def lyrics(request: Request, artist: str = Query(..., min_length=1, max_length=300),
                  title: str = Query(..., min_length=1, max_length=300), album: Optional[str] = Query(None, max_length=300),
