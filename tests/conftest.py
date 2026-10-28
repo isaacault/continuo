@@ -84,6 +84,10 @@ def fake(monkeypatch, tmp_path):
     from continuo.search import ranked
     from continuo.upstream import deezer
     ranked._ids_cache.clear()
+    from continuo.search import discover
+    discover._page_cache.clear()
+    discover._last_page.clear()
+    discover._slow_cache.clear()
     merge._quick_cache.clear()
     deezer.reset()
     pipeline._progress.clear()

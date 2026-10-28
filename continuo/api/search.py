@@ -121,6 +121,17 @@ async def discover(request: Request, user: CurrentUser = Depends(require_user)) 
     return await discover_mod.page(user.id)
 
 
+@router.get("/discover/playlists/{playlist_id}")
+async def discover_playlist(request: Request, playlist_id: str, user: CurrentUser = Depends(require_user)) -> dict:
+    """One of ListenBrainz's playlists for the account (/v1/discover's playlists): its songs."""
+    catalog_limiter.check(request)
+    from ..search import discover as discover_mod
+    page = await discover_mod.playlist_page(user.id, _check_mbid(playlist_id))
+    if page is None:
+        raise ApiError(404, "not_found", "ListenBrainz doesn't know that playlist.")
+    return page
+
+
 @router.get("/catalog/albums/{mbid}")
 async def catalog_album(request: Request, mbid: str,
                         user: CurrentUser = Depends(require_user)) -> dict:

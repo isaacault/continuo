@@ -193,3 +193,64 @@ async def recording_releases(recording_mbids: list[str]) -> dict[str, dict]:
                          "year": rel.get("year"), "caaReleaseMbid": rel.get("caa_release_mbid")}
     return out
 
+
+def _mbid_of(url) -> Optional[str]:
+    if isinstance(url, list):
+        url = url[0] if url else None
+    return url.rstrip("/").rsplit("/", 1)[-1] if isinstance(url, str) and url else None
+
+
+def _plain(html: Optional[str]) -> Optional[str]:
+    import re
+    text = re.sub(r"<[^>]+>", "", html or "").strip()
+    return text or None
+
+
+async def created_for(user: str) -> Optional[list[dict]]:
+    """ListenBrainz's playlists made for [user] from their listens (Weekly Jams, Weekly
+    Exploration, Daily Jams…), the newest of each kind: [{id, title, description, date, kind}];
+    None when ListenBrainz failed."""
+    try:
+        r = await _client("listenbrainz", _API_URL).get(f"/user/{user}/playlists/createdfor", params={"count": 25})
+        r.raise_for_status()
+        data = r.json()
+    except (httpx.HTTPError, ValueError) as e:
+        log.warning("listenbrainz: playlists for %s failed: %s", user, e)
+        return None
+    newest: dict[str, dict] = {}
+    for item in data.get("playlists") or []:
+        p = item.get("playlist") or {}
+        meta = ((p.get("extension") or {}).get("https://musicbrainz.org/doc/jspf#playlist") or {}).get("additional_metadata") or {}
+        kind = (meta.get("algorithm_metadata") or {}).get("source_patch") or p.get("title") or ""
+        pid = _mbid_of(p.get("identifier"))
+        if not pid or not p.get("title"):
+            continue
+        entry = {"id": pid, "title": p["title"], "description": _plain(p.get("annotation")), "date": p.get("date"), "kind": kind}
+        if kind not in newest or (entry["date"] or "") > (newest[kind]["date"] or ""):
+            newest[kind] = entry
+    return sorted(newest.values(), key=lambda e: e["date"] or "", reverse=True)
+
+
+async def playlist(playlist_id: str) -> Optional[dict]:
+    """{title, description, tracks: [{title, artist, durationMs, recordingMbid, releaseName,
+    caaReleaseMbid}]}; None when ListenBrainz failed or doesn't know it."""
+    try:
+        r = await _client("listenbrainz", _API_URL).get(f"/playlist/{playlist_id}")
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        p = (r.json() or {}).get("playlist") or {}
+    except (httpx.HTTPError, ValueError) as e:
+        log.warning("listenbrainz: playlist %s failed: %s", playlist_id, e)
+        return None
+    tracks = []
+    for t in p.get("track") or []:
+        meta = ((t.get("extension") or {}).get("https://musicbrainz.org/doc/jspf#track") or {}).get("additional_metadata") or {}
+        rec = _mbid_of(t.get("identifier"))
+        if not rec or not t.get("title"):
+            continue
+        dur = t.get("duration")
+        tracks.append({"title": t["title"], "artist": t.get("creator"), "durationMs": int(dur) if str(dur or "").isdigit() else None,
+                       "recordingMbid": rec, "releaseName": t.get("album"), "caaReleaseMbid": meta.get("caa_release_mbid")})
+    return {"title": p.get("title"), "description": _plain(p.get("annotation")), "tracks": tracks}
+

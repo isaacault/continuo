@@ -50,7 +50,10 @@ def test_for_you_is_similar_artists_you_don_t_have_and_their_top_songs(monkeypat
     monkeypatch.setattr(lidarr, "search_artists", search_artists)
     monkeypatch.setattr(listenbrainz, "similar_artists", similar)
     monkeypatch.setattr(listenbrainz, "top_recordings", top)
-    out = asyncio.run(discover._for_you(YOURS, limit=10))
+    async def go():
+        picks, yours = await discover._similar(YOURS)
+        return await discover._for_you(picks, yours, limit=10)
+    out = asyncio.run(go())
     assert [t["title"] for t in out] == ["Hit 0", "Hit 1"], "no repeats, no remixes, two per artist, none of yours"
 
 
@@ -63,3 +66,62 @@ def test_a_release_without_a_cover_shows_its_artist_s_picture(monkeypatch):
                                [dict(FRESH[0], caa_release_mbid=None)], limit=5)
     out = asyncio.run(discover._with_covers(albums))
     assert out[0]["imageUrl"] == "https://images.lidarr.audio/jw.jpg"
+
+
+LBAPI = "https://api.listenbrainz.org/1"
+
+
+def _pl(pid, kind, date_, title):
+    return {"playlist": {"identifier": f"https://listenbrainz.org/playlist/{pid}", "title": title, "date": date_,
+                         "annotation": "<p>Made <b>for you</b></p>",
+                         "extension": {"https://musicbrainz.org/doc/jspf#playlist": {"additional_metadata": {
+                             "algorithm_metadata": {"source_patch": kind}}}}}}
+
+
+def test_listenbrainz_playlists_the_newest_of_each_kind(fake):
+    fake.on("GET", f"{LBAPI}/user/isaac_lb/playlists/createdfor", {"playlists": [
+        _pl("a", "daily-jams", "2026-10-27T23:00:00", "Daily Jams 27"), _pl("b", "daily-jams", "2026-10-28T23:00:00", "Daily Jams 28"),
+        _pl("c", "weekly-exploration", "2026-10-26T00:00:00", "Weekly Exploration")]})
+    out = asyncio.run(listenbrainz.created_for("isaac_lb"))
+    assert [p["title"] for p in out] == ["Daily Jams 28", "Weekly Exploration"]
+    assert out[0]["description"] == "Made for you"
+
+
+def test_a_listenbrainz_playlist_becomes_songs(fake, monkeypatch):
+    fake.on("GET", f"{LBAPI}/playlist/11111111-2222-3333-4444-555555555555", {"playlist": {"title": "Weekly Jams", "track": [
+        {"title": "Bless This Morning Year", "creator": "Helios", "album": "Eingya", "duration": "361880",
+         "identifier": ["https://musicbrainz.org/recording/rec-1"],
+         "extension": {"https://musicbrainz.org/doc/jspf#track": {"additional_metadata": {"caa_release_mbid": "caa-1"}}}}]}})
+
+    async def releases(ids):
+        return {"rec-1": {"releaseGroupMbid": "rg-1", "name": "Eingya", "year": 2006, "caaReleaseMbid": None}}
+    monkeypatch.setattr(listenbrainz, "recording_releases", releases)
+    page = asyncio.run(discover.playlist_page(None, "11111111-2222-3333-4444-555555555555"))
+    song = page["tracks"][0]
+    assert page["title"] == "Weekly Jams" and song["key"] == "mb:rec:rec-1" and song["album"]["musicBrainzReleaseGroupId"] == "rg-1"
+    assert song["durationMs"] == 361880
+
+
+def test_playlists_need_a_linked_listenbrainz_account(fake):
+    assert asyncio.run(discover._playlists(None)) == []
+
+
+
+def test_an_expired_page_is_served_while_a_fresh_one_is_built(monkeypatch):
+    built = []
+
+    async def build(user_id, limit):
+        built.append(1)
+        return {"n": len(built)}
+    monkeypatch.setattr(discover, "_build", build)
+    discover._page_cache.clear()
+    discover._last_page.clear()
+
+    async def go():
+        first = await discover.page(1)
+        discover._page_cache.clear()                 # three hours later
+        stale = await discover.page(1)
+        await asyncio.gather(*discover._warming)
+        return first, stale, await discover.page(1)
+    first, stale, fresh = asyncio.run(go())
+    assert first == {"n": 1} and stale == {"n": 1} and fresh == {"n": 2}

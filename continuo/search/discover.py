@@ -29,11 +29,18 @@ log = logging.getLogger("continuo")
 _fresh_cache = TTLCache(6 * 3600.0, max_items=2)
 _page_cache = TTLCache(3 * 3600.0, max_items=64)
 _artist_art_cache = TTLCache(24 * 3600.0, max_items=512)
+_slow_cache = TTLCache(24 * 3600.0, max_items=512)
+# The last page built for each account, served while a fresh one is built (see page).
+_last_page: dict = {}
+_rebuilding: set = set()
 _WARM_AT_ONCE = 4
 _FRESH_DAYS = 90
 _SEEDS = 3
 _SIMILAR = 6
 _SONGS_EACH = 2
+# Explore: artists like yours, and each one's most listened album.
+_EXPLORE_ARTISTS = 10
+_EXPLORE_ALBUMS = 10
 # Joiners in an artist credit: "Drake feat. Future", "FISHER & Laurel".
 _REMIX = re.compile(r"\b(?:remix|rmx|edit|sped up|slowed)\b", re.IGNORECASE)
 _CREDIT_SPLIT = re.compile(r"\s+(?:feat\.?|ft\.?|featuring|with|x|&|and)\s+|,\s*|\s*/\s*", re.IGNORECASE)
@@ -91,7 +98,18 @@ async def _artist_mbid(name: str) -> Optional[str]:
     return next((h["musicBrainzArtistId"] for h in hits if normalise(h.get("name")) == want), None)
 
 
-async def _for_you(albums: list[dict], limit: int) -> list[dict]:
+async def _mbid_or_blank(name: str) -> str:
+    return await _artist_mbid(name) or ""
+
+
+async def _similar_or_blank(mbid: str) -> list:
+    found = await listenbrainz.similar_artists(mbid, limit=15)
+    return found if found is not None else []
+
+
+async def _similar(albums: list[dict]) -> tuple[list[tuple[str, str]], set[str]]:
+    """Artists like the account's most collected ones and not in its library, most alike first:
+    ([(mbid, name)], the account's artists, normalised)."""
     counts: dict[str, tuple[int, str]] = {}
     for a in albums:
         if a.get("artist"):
@@ -100,11 +118,13 @@ async def _for_you(albums: list[dict], limit: int) -> list[dict]:
     # The most collected artists, rotating day by day among the top dozen so Home changes.
     top = sorted(counts.items(), key=lambda kv: -kv[1][0])[:12]
     if not top:
-        return []
+        return [], set(counts)
     start = date.today().toordinal() % len(top)
     seeds = [name for _, (_, name) in (top[start:] + top[:start])[:_SEEDS]]
-    mbids = [m for m in await asyncio.gather(*(_artist_mbid(s) for s in seeds)) if m]
-    similar = await asyncio.gather(*(listenbrainz.similar_artists(m, limit=15) for m in mbids))
+    # Seeds' IDs and their similar artists change slowly: kept a day.
+    mbids = [m for m in await asyncio.gather(*(cached(_slow_cache, ("mbid", normalise(s)), lambda s=s: _mbid_or_blank(s))
+                                               for s in seeds)) if m]
+    similar = await asyncio.gather(*(cached(_slow_cache, ("similar", m), lambda m=m: _similar_or_blank(m)) for m in mbids))
     yours = set(counts)
     score: dict[str, float] = {}
     names: dict[str, str] = {}
@@ -114,7 +134,13 @@ async def _for_you(albums: list[dict], limit: int) -> list[dict]:
                 continue
             score[a["musicBrainzArtistId"]] = score.get(a["musicBrainzArtistId"], 0.0) + 1.0 / (rank + 1)
             names[a["musicBrainzArtistId"]] = a["name"]
-    picks = sorted(score, key=lambda m: -score[m])[:_SIMILAR]
+    ranked = sorted(score, key=lambda m: -score[m])
+    return [(m, names[m]) for m in ranked], yours
+
+
+async def _for_you(picks: list[tuple[str, str]], yours: set[str], limit: int) -> list[dict]:
+    names = dict(picks)
+    picks = [m for m, _ in picks[:_SIMILAR]]
     songs = await asyncio.gather(*(listenbrainz.top_recordings(m, limit=_SONGS_EACH + 3) for m in picks))
     out, titles, per_artist = [], set(), {}
     for mbid, lst in zip(picks, songs, strict=False):
@@ -194,10 +220,62 @@ async def _warm(sources: list[str]) -> None:
 _warming: set[asyncio.Task] = set()
 
 
+async def _artist_tiles(picks: list[tuple[str, str]]) -> list[dict]:
+    """Explore's artists: each with a picture where Deezer (with ranked search on) or Lidarr has one."""
+    from .. import config
+    from ..upstream import deezer
+
+    async def one(mbid: str, name: str) -> dict:
+        # Deezer first when ranked search is on (0.15 s, and it has nearly everyone's picture);
+        # Lidarr's lookups are slower and taken more or less one at a time.
+        picture = None
+        if config.settings.search_deezer:
+            try:
+                picture = next((a.get("picture") for a in await deezer.search_artists(name, 3)
+                                if normalise(a["name"]) == normalise(name) and a.get("picture")), None)
+            except (deezer.Exhausted, httpx.HTTPError, ValueError):
+                pass
+        if picture is None:
+            try:
+                picture = next((h.get("imageUrl") for h in await lidarr.search_artists(name)
+                                if h.get("musicBrainzArtistId") == mbid and h.get("imageUrl")), None)
+            except (httpx.HTTPError, ValueError):
+                pass
+        return {"kind": "artist", "name": name, "musicBrainzArtistId": mbid, "imageUrl": picture, "lidarrArtistId": None}
+    return list(await asyncio.gather(*(one(m, n) for m, n in picks)))
+
+
+async def _album_tiles(picks: list[tuple[str, str]]) -> list[dict]:
+    """Explore's albums: each similar artist's most listened album."""
+    tops = await asyncio.gather(*(listenbrainz.top_release_groups(m, limit=1) for m, _ in picks))
+    out = []
+    for (mbid, name), lst in zip(picks, tops, strict=True):
+        for a in lst or []:
+            out.append({"kind": "album", "title": a["title"], "artist": name, "year": a["year"], "albumType": a["albumType"],
+                        "imageUrl": merge._caa(a["caaReleaseMbid"]), "musicBrainzReleaseGroupId": a["musicBrainzReleaseGroupId"],
+                        "musicBrainzArtistId": mbid, "releaseIds": [], "owned": False, "trackCount": None, "lidarrAlbumId": None})
+    return out
+
+
+async def _playlists(user_id: Optional[int]) -> list[dict]:
+    """ListenBrainz's playlists for the account's linked ListenBrainz user (scrobbling)."""
+    from ..db import scrobblers
+    account = ((scrobblers.all_for(user_id) if user_id is not None else {}).get("listenbrainz") or {}).get("account")
+    if not account:
+        return []
+    return await listenbrainz.created_for(account) or []
+
+
 async def _build(user_id: Optional[int], limit: int) -> dict:
     albums = _your_albums(user_id)
     fresh_t = cached(_fresh_cache, "fresh", _fresh_releases)
-    fresh, songs = await asyncio.gather(fresh_t, _for_you(albums, limit), return_exceptions=True)
+    picks, yours = await _similar(albums)
+    fresh, songs, artist_tiles, album_tiles, playlists = await asyncio.gather(
+        fresh_t, _for_you(picks, yours, limit), _artist_tiles(picks[:_EXPLORE_ARTISTS]),
+        _album_tiles(picks[:_EXPLORE_ALBUMS]), _playlists(user_id), return_exceptions=True)
+    artist_tiles = [] if isinstance(artist_tiles, BaseException) else artist_tiles
+    album_tiles = [] if isinstance(album_tiles, BaseException) else album_tiles
+    playlists = [] if isinstance(playlists, BaseException) else playlists
     if isinstance(fresh, BaseException):
         if not isinstance(fresh, (httpx.HTTPError, ValueError)):
             raise fresh
@@ -211,7 +289,7 @@ async def _build(user_id: Optional[int], limit: int) -> dict:
     index = merge._LibraryIndex(lib_db.all_albums(), user_id)
     requests = req_db.active_by_release_group()
     cat_new = await _with_covers(new_from(albums, fresh, limit))
-    task = asyncio.get_running_loop().create_task(_warm([a.get("imageUrl") for a in cat_new] + [t.get("imageUrl") for t in songs]))
+    task = asyncio.get_running_loop().create_task(_warm([a.get("imageUrl") for a in cat_new + artist_tiles + album_tiles]))
     _warming.add(task)
     task.add_done_callback(_warming.discard)
     # Already in the library under another release group (a reissue matched by name): left out.
@@ -223,9 +301,55 @@ async def _build(user_id: Optional[int], limit: int) -> dict:
         if rg in by_rg:
             hit["releaseDate"] = by_rg[rg]["releaseDate"]
     tracks = merge.merge_tracks([], songs, index, requests, limit, req_db.active_tracks())
-    return {"newReleases": new, "forYou": tracks, "since": (date.today() - timedelta(days=_FRESH_DAYS)).isoformat()}
+    explore_albums = [h for h in merge.merge_albums([], album_tiles, index, requests, len(album_tiles))
+                      if (h.get("availability") or {}).get("state") != "in_library"]
+    return {"newReleases": new, "forYou": tracks, "artists": merge.merge_artists([], artist_tiles, len(artist_tiles)),
+            "albums": explore_albums, "playlists": playlists,
+            "since": (date.today() - timedelta(days=_FRESH_DAYS)).isoformat()}
+
+
+async def playlist_page(user_id: Optional[int], playlist_id: str) -> Optional[dict]:
+    """One of ListenBrainz's playlists as songs (search hits): Play now, Request."""
+    p = await listenbrainz.playlist(playlist_id)
+    if p is None:
+        return None
+    releases = await listenbrainz.recording_releases([t["recordingMbid"] for t in p["tracks"]])
+    songs = []
+    for t in p["tracks"]:
+        rel = releases.get(t["recordingMbid"]) or {}
+        songs.append({"kind": "track", "musicBrainzRecordingId": t["recordingMbid"], "title": t["title"],
+                      "artist": t.get("artist"), "durationMs": t.get("durationMs"),
+                      "album": {"title": rel.get("name") or t.get("releaseName"), "musicBrainzReleaseGroupId": rel.get("releaseGroupMbid"),
+                                "year": rel.get("year"), "albumType": None},
+                      "imageUrl": merge._caa(t.get("caaReleaseMbid") or rel.get("caaReleaseMbid"))})
+    index = merge._LibraryIndex(lib_db.all_albums(), user_id)
+    tracks = merge.merge_tracks([], songs, index, req_db.active_by_release_group(), len(songs), req_db.active_tracks())
+    return {"id": playlist_id, "title": p["title"], "description": p["description"], "tracks": tracks}
 
 
 async def page(user_id: Optional[int], limit: int = 12) -> dict:
-    """Home's discovery, cached per account for 3 h."""
-    return await cached(_page_cache, (user_id, limit), lambda: _build(user_id, limit))
+    """Home's and Explore's discovery, cached per account for 3 h. Past that the last page is
+    served at once and a fresh one built behind it: building takes seconds (similar artists,
+    pictures, top albums), and only the very first ask waits for it."""
+    key = (user_id, limit)
+    hit = _page_cache.get(key)
+    if hit is not None:
+        return hit
+    if key in _last_page:
+        if key not in _rebuilding:
+            _rebuilding.add(key)
+            task = asyncio.get_running_loop().create_task(_rebuild(key))
+            _warming.add(task)
+            task.add_done_callback(_warming.discard)
+        return _last_page[key]
+    return await _rebuild(key)
+
+
+async def _rebuild(key) -> dict:
+    try:
+        value = await _build(*key)
+        _page_cache.put(key, value)
+        _last_page[key] = value
+        return value
+    finally:
+        _rebuilding.discard(key)
