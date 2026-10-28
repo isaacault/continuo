@@ -80,6 +80,19 @@ async def keep(stream_id: str, user: CurrentUser = Depends(require_user)) -> dic
     return view.to_out(req, tracks.pipeline(req), user.username)
 
 
+class ScrobbleIn(BaseModel):
+    # Epoch seconds the song started: a finished listen. Absent: it's playing now.
+    listenedAt: Optional[int] = Field(None, ge=0)
+
+
+@router.post("/{stream_id}/scrobble")
+async def scrobble(stream_id: str, body: ScrobbleIn, user: CurrentUser = Depends(require_user)) -> dict:
+    """Scrobble a Play now song (Navidrome can't: it isn't a library song) to the account's linked
+    ListenBrainz and Last.fm. Best-effort: {sent: [services]}; a failure is logged, not an error."""
+    row = _mine(stream_id, user)
+    return {"sent": await playnow.scrobble(user.id, row, body.listenedAt)}
+
+
 @router.get("/{stream_id}/audio")
 async def audio(stream_id: str, request: Request, user: CurrentUser = Depends(require_user)):
     """The song's audio, served while it downloads: the full length is announced (the copy's size
