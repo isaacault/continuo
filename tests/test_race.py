@@ -119,3 +119,20 @@ def test_the_torrent_winning_cancels_soulseek_and_clears_its_files(req, fake, tm
     assert fake.called("DELETE", f"{SLSKD}/transfers/downloads/good/t1")
     assert not folder.exists()
     assert races_db.for_request(req["id"])[0]["state"] == "lost"
+
+
+def test_an_album_nothing_was_found_for_is_fetched_from_soulseek(req, fake, monkeypatch):
+    row = req_db.update(req["id"], status="searching")
+    monkeypatch.setattr(race, "seconds_since", lambda ts: 7 * 3600 if ts else None)
+    asyncio.run(race.unfound([row]))
+    (r,) = races_db.for_request(row["id"])
+    assert r["state"] == "downloading" and r["username"] == "good"
+    asyncio.run(race.unfound([req_db.get(row["id"])]))
+    assert len(races_db.for_request(row["id"])) == 1, "one attempt at a time"
+
+
+def test_a_fresh_unfound_request_waits_its_hours(req, monkeypatch):
+    row = req_db.update(req["id"], status="searching")
+    monkeypatch.setattr(race, "seconds_since", lambda ts: 3600 if ts else None)
+    asyncio.run(race.unfound([row]))
+    assert races_db.for_request(row["id"]) == [], "Lidarr's indexers get their 6 hours first"
