@@ -136,3 +136,9 @@ def test_deezer_can_be_turned_off(upstreams, monkeypatch):
     from continuo import config
     monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, search_deezer=False))
     assert asyncio.run(merge._ranked("espresso", 3)) is None, "MusicBrainz's search alone"
+
+
+
+def test_hits_carry_their_popularity(upstreams):
+    out = asyncio.run(ranked.catalog("espresso", 3))
+    assert out["popularity"]["mb:rec:rec-0"] > out["popularity"]["mb:rec:rec-1"], "Deezer's rank, on a log-like scale"

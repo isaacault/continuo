@@ -101,3 +101,19 @@ def test_a_slow_listenbrainz_doesn_t_hold_the_quick_search_up_nor_stay_cached(up
 def test_the_fallback_quick_search_is_in_its_order_too(upstreams):
     out = asyncio.run(merge.quick_search("sabrina", "isaac"))
     assert out["ranked"] is True, "most listened first: the app keeps the order"
+
+
+
+def test_a_library_hit_on_someone_else_s_name_doesn_t_crowd_out_the_catalogue():
+    results = [
+        {"kind": "track", "key": "nd:track:1", "title": "Miss Me (Feat. Lil Wayne)", "artist": "Drake", "availability": {"state": "in_library"}},
+        {"kind": "track", "key": "nd:track:2", "title": "Miss Me (Feat. Lil Wayne)", "artist": "Drake", "availability": {"state": "in_library"}},
+        {"kind": "artist", "key": "nd:artist:9", "name": "Lil Baby", "availability": {"state": "in_library"}},
+        {"kind": "artist", "key": "mb:artist:peep", "name": "Lil Peep", "availability": {"state": "catalog"}},
+        {"kind": "artist", "key": "mb:artist:x", "name": "Santigold & Lil Wayne", "availability": {"state": "in_library"}},
+        {"kind": "track", "key": "mb:rec:star", "title": "Star Shopping", "artist": "Lil Peep", "availability": {"state": "requestable"}},
+    ]
+    out = merge.blended("lil", results, {"mb:artist:peep": 6.5, "mb:rec:star": 6.0}, limit=2)
+    assert [r["name"] for r in out if r["kind"] == "artist"] == ["Lil Peep", "Lil Baby"]
+    tracks = [r["key"] for r in out if r["kind"] == "track"]
+    assert sorted(tracks) == ["mb:rec:star", "nd:track:1"], "each once"
