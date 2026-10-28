@@ -28,6 +28,10 @@ log = logging.getLogger("continuo")
 _seen: dict[int, tuple[float, int, float, int]] = {}
 MAX_ATTEMPTS = 2
 IMPORT_GIVE_UP_S = 2 * 3600
+# An album Lidarr has found nothing for: Soulseek is asked once it's been searching this long,
+# and again a day after an attempt that failed (MAX_ATTEMPTS in all), one album per tick.
+UNFOUND_AFTER_S = 6 * 3600
+UNFOUND_RETRY_S = 24 * 3600
 
 
 def is_slow(first_t: float, first_left: int, last_t: float, left: int, now: float) -> bool:
@@ -149,6 +153,36 @@ async def tick(rows: list[dict], queue_index: dict) -> None:
         elif (seconds_since(race["started_at"]) or 0) > IMPORT_GIVE_UP_S:
             # Handed to Lidarr, but no import came (it rejected the folder): the race is over.
             races_db.finish(race["id"], "failed", "Lidarr didn't import the Soulseek copy")
+
+
+def unfound_due(row: dict, past: list[dict]) -> bool:
+    """Whether to try Soulseek for an album request nothing has been downloaded for."""
+    if row.get("status") != "searching" or not row.get("lidarr_album_id"):
+        return False
+    if (seconds_since(row.get("created_at")) or 0) < UNFOUND_AFTER_S:
+        return False
+    if any(r["state"] in races_db.ACTIVE + ("won",) for r in past) or len(past) >= MAX_ATTEMPTS:
+        return False
+    last = max((r["started_at"] for r in past if r.get("started_at")), default=None)
+    return last is None or (seconds_since(last) or 0) > UNFOUND_RETRY_S
+
+
+async def unfound(rows: list[dict]) -> None:
+    """From the status loop: an album request Lidarr's indexers have found nothing for, hours on,
+    is fetched from Soulseek by continuo, as a race (Soularr passes over albums whose copies don't
+    match the edition Lidarr monitors: We All Speak in Poems searched for 8 days with six full
+    copies on Soulseek). One album per tick, so Soulseek isn't asked many things at once."""
+    s = config.settings
+    if not s.race_enabled or not slskd.enabled():
+        return
+    for row in rows:
+        if not unfound_due(row, races_db.for_request(row["id"])):
+            continue
+        try:
+            await start(row)
+        except Exception:  # noqa: BLE001 — one race must not stop the status loop
+            log.exception("race %s: couldn't start for an unfound album", row["id"])
+        return
 
 
 def _won_by_soulseek(payload: dict) -> bool:

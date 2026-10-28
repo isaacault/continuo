@@ -107,5 +107,6 @@ async def tick() -> None:
     try:
         await race.tick([r for r in rows if r["status"] == "downloading" or r.get("lidarr_album_id") in queue_index],
                         queue_index)
+        await race.unfound([r for r in rows if r["status"] == "searching" and r.get("lidarr_album_id") not in queue_index])
     except Exception:  # noqa: BLE001
         log.exception("race tick failed")
