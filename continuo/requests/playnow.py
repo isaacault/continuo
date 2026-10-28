@@ -27,7 +27,9 @@ log = logging.getLogger("continuo")
 # Bytes on disk before the app is told to start playing (a FLAC header and a few seconds of audio).
 START_BYTES = 256 * 1024
 START_TIMEOUT_S = 25.0
-MAX_COPIES = 3
+# Copies tried before giving up: peers often fail to start or refuse (three of 44 did, in 26 s,
+# and "Not My Ask" failed), and each one that does costs seconds, not minutes.
+MAX_COPIES = 6
 # Queued songs (polyphony#164) are fetched this many at a time per account, needed soonest first;
 # a song tapped to play now starts at once whatever is running.
 MAX_FETCHING = 2
