@@ -123,7 +123,7 @@ def test_the_torrent_winning_cancels_soulseek_and_clears_its_files(req, fake, tm
 
 def test_an_album_nothing_was_found_for_is_fetched_from_soulseek(req, fake, monkeypatch):
     row = req_db.update(req["id"], status="searching")
-    monkeypatch.setattr(race, "seconds_since", lambda ts: 7 * 3600 if ts else None)
+    monkeypatch.setattr(race, "seconds_since", lambda ts: 15 * 60 if ts else None)
     asyncio.run(race.unfound([row]))
     (r,) = races_db.for_request(row["id"])
     assert r["state"] == "downloading" and r["username"] == "good"
@@ -133,6 +133,6 @@ def test_an_album_nothing_was_found_for_is_fetched_from_soulseek(req, fake, monk
 
 def test_a_fresh_unfound_request_waits_its_hours(req, monkeypatch):
     row = req_db.update(req["id"], status="searching")
-    monkeypatch.setattr(race, "seconds_since", lambda ts: 3600 if ts else None)
+    monkeypatch.setattr(race, "seconds_since", lambda ts: 120 if ts else None)
     asyncio.run(race.unfound([row]))
-    assert races_db.for_request(row["id"]) == [], "Lidarr's indexers get their 6 hours first"
+    assert races_db.for_request(row["id"]) == [], "Lidarr's own search gets its first minutes"
