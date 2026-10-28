@@ -28,9 +28,10 @@ log = logging.getLogger("continuo")
 _seen: dict[int, tuple[float, int, float, int]] = {}
 MAX_ATTEMPTS = 2
 IMPORT_GIVE_UP_S = 2 * 3600
-# An album Lidarr has found nothing for: Soulseek is asked once it's been searching this long,
+# An album Lidarr has found nothing for: Soulseek is asked once it's been searching this long (Lidarr
+# searches its indexers the moment a request arrives, and grabs within a minute or two when it can),
 # and again a day after an attempt that failed (MAX_ATTEMPTS in all), one album per tick.
-UNFOUND_AFTER_S = 6 * 3600
+UNFOUND_AFTER_S = 10 * 60
 UNFOUND_RETRY_S = 24 * 3600
 
 
