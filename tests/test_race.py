@@ -136,3 +136,35 @@ def test_a_fresh_unfound_request_waits_its_hours(req, monkeypatch):
     monkeypatch.setattr(race, "seconds_since", lambda ts: 120 if ts else None)
     asyncio.run(race.unfound([row]))
     assert races_db.for_request(row["id"]) == [], "Lidarr's own search gets its first minutes"
+
+
+def test_a_racer_whose_transfers_were_cleared_is_imported_from_its_files(req, fake, tmp_path, monkeypatch):
+    # Soularr clears finished transfers from slskd every cycle: the race goes by the files.
+    import dataclasses
+    folder = tmp_path / "Based On A True Story [FLAC]"
+    folder.mkdir()
+    (folder / "01 Ernie.flac").write_bytes(b"x" * 3)
+    (folder / "02 Roady_639000000000000000.flac").write_bytes(b"x" * 4)     # slskd's taken-name suffix
+    monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, slskd_downloads_dir=str(tmp_path)))
+    races_db.add(req["id"], "soulseek", username="good", local_folder="Based On A True Story [FLAC]",
+                 files=[{"filename": "@@c\\FFD\\Based On A True Story [FLAC]\\01 Ernie.flac", "size": 3},
+                        {"filename": "@@c\\FFD\\Based On A True Story [FLAC]\\02 Roady.flac", "size": 4}])
+    fake.on("GET", f"{SLSKD}/transfers/downloads/good", {"directories": []})
+    fake.on("POST", f"{LIDARR}/command", {"id": 5})
+    asyncio.run(race.tick([], {}))
+    assert fake.body(fake.called("POST", f"{LIDARR}/command")[0])["name"] == "DownloadedAlbumsScan"
+    assert races_db.for_request(req["id"])[0]["state"] == "importing"
+
+
+def test_a_racer_with_a_file_missing_or_short_keeps_waiting(req, fake, tmp_path, monkeypatch):
+    import dataclasses
+    folder = tmp_path / "Based On A True Story [FLAC]"
+    folder.mkdir()
+    (folder / "01 Ernie.flac").write_bytes(b"x" * 2)                      # short: still being written
+    monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, slskd_downloads_dir=str(tmp_path)))
+    races_db.add(req["id"], "soulseek", username="good", local_folder="Based On A True Story [FLAC]",
+                 files=[{"filename": "@@c\\FFD\\Based On A True Story [FLAC]\\01 Ernie.flac", "size": 3}])
+    fake.on("GET", f"{SLSKD}/transfers/downloads/good", {"directories": []})
+    asyncio.run(race.tick([], {}))
+    assert not fake.called("POST", f"{LIDARR}/command")
+    assert races_db.for_request(req["id"])[0]["state"] == "downloading"
