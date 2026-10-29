@@ -123,25 +123,32 @@ async def _follow(race: dict) -> None:
     await _import(race)
 
 
-def _album_folder(race: dict) -> Optional[str]:
-    """'Alaskan Tapes - We All Speak in Poems': Lidarr reads the artist from the folder's name and
-    skips one it can't ("2016 - We All Speak In Poems" was an Unknown Artist), so the race names
-    the folder the way Soularr does. None without the request's artist and title."""
+async def _album_folder(race: dict) -> Optional[str]:
+    """'Alaskan Tapes - We All Speak in Poems (2016)': Lidarr reads the artist and album from the
+    folder's name, and its parser wants the year too (without it, "Unknown Artist", as for the
+    uploader's "2016 - We All Speak In Poems"); Soularr names folders the same way. The year comes
+    from the request, else Lidarr's album. None without the request's artist and title."""
     row = req_db.get(race["request_id"]) or {}
     if not row.get("artist") or not row.get("title"):
         return None
-    name = f"{row['artist']} - {row['title']}"
+    year = row.get("year")
+    if not year and row.get("lidarr_album_id"):
+        try:
+            year = ((await lidarr.get_album(row["lidarr_album_id"])).get("releaseDate") or "")[:4] or None
+        except httpx.HTTPError:
+            year = None
+    name = f"{row['artist']} - {row['title']}" + (f" ({year})" if year else "")
     return re.sub(r'[\\/:*?"<>|]+', " ", name).strip(" .") or None
 
 
-def _renamed(race: dict) -> str:
+async def _renamed(race: dict) -> str:
     """The race's folder, renamed to [_album_folder] when it's in slskd's downloads folder."""
     base, current = config.settings.slskd_downloads_dir, race["local_folder"]
-    target = _album_folder(race)
+    target = await _album_folder(race)
     if not base or not target or target == current or not os.path.isdir(os.path.join(base, current)):
         return current
     if os.path.exists(os.path.join(base, target)):
-        target = f"{target} ({race['id']})"
+        target = f"{target} [{race['id']}]"
     try:
         os.rename(os.path.join(base, current), os.path.join(base, target))
     except OSError as e:
@@ -152,7 +159,7 @@ def _renamed(race: dict) -> str:
 
 
 async def _import(race: dict, folder: Optional[str] = None) -> None:
-    folder = folder or _renamed(race)
+    folder = folder or await _renamed(race)
     path = f"{config.settings.lidarr_soulseek_path.rstrip('/')}/{folder}"
     try:
         await lidarr.import_folder(path)
@@ -162,13 +169,14 @@ async def _import(race: dict, folder: Optional[str] = None) -> None:
     races_db.set_state(race["id"], "importing", f"Lidarr importing {folder}")
 
 
-def _import_skipped(race: dict) -> bool:
-    """Handed to Lidarr under a name it couldn't read (before folders were renamed): the files are
-    still there under the old name."""
+async def _import_skipped(race: dict) -> bool:
+    """Handed to Lidarr under a name it couldn't read (before folders were named for it): the
+    files are still there under that name."""
     base = config.settings.slskd_downloads_dir
-    target = _album_folder(race)
-    return bool(base and target and race["local_folder"] != target and not race["local_folder"].startswith(target)
-                and os.path.isdir(os.path.join(base, race["local_folder"])))
+    if not base or not os.path.isdir(os.path.join(base, race["local_folder"])):
+        return False
+    target = await _album_folder(race)
+    return bool(target and race["local_folder"] != target and not race["local_folder"].startswith(target + " ["))
 
 
 def _all_on_disk(race: dict) -> bool:
@@ -216,9 +224,9 @@ async def tick(rows: list[dict], queue_index: dict) -> None:
                 await _follow(race)
             except Exception:  # noqa: BLE001
                 log.exception("race %s: follow failed", race["request_id"])
-        elif _import_skipped(race):
+        elif await _import_skipped(race):
             # Once, after renaming: a folder that can't be renamed isn't sent again every tick.
-            folder = _renamed(race)
+            folder = await _renamed(race)
             if folder != race["local_folder"]:
                 try:
                     await _import(race, folder)

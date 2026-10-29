@@ -188,10 +188,10 @@ def test_the_folder_is_named_artist_album_for_lidarr(req, fake, tmp_path, monkey
     fake.on("POST", f"{LIDARR}/command", {"id": 5})
     asyncio.run(race.tick([], {}))
     assert fake.body(fake.called("POST", f"{LIDARR}/command")[0])["path"] == \
-        "/data/downloads/soulseek/Fat Freddy's Drop - Based on a True Story"
-    assert (tmp_path / "Fat Freddy's Drop - Based on a True Story" / "01 Ernie.flac").exists()
+        "/data/downloads/soulseek/Fat Freddy's Drop - Based on a True Story (2005)"
+    assert (tmp_path / "Fat Freddy's Drop - Based on a True Story (2005)" / "01 Ernie.flac").exists()
     (r,) = races_db.for_request(req["id"])
-    assert r["state"] == "importing" and r["local_folder"] == "Fat Freddy's Drop - Based on a True Story"
+    assert r["state"] == "importing" and r["local_folder"] == "Fat Freddy's Drop - Based on a True Story (2005)"
 
 
 def test_an_import_lidarr_skipped_is_renamed_and_sent_once_more(req, fake, tmp_path, monkeypatch):
@@ -202,4 +202,17 @@ def test_an_import_lidarr_skipped_is_renamed_and_sent_once_more(req, fake, tmp_p
     asyncio.run(race.tick([], {}))
     asyncio.run(race.tick([], {}))
     assert len(fake.called("POST", f"{LIDARR}/command")) == 1, "once, not every tick"
-    assert races_db.for_request(req["id"])[0]["local_folder"] == "Fat Freddy's Drop - Based on a True Story"
+    assert races_db.for_request(req["id"])[0]["local_folder"] == "Fat Freddy's Drop - Based on a True Story (2005)"
+
+
+def test_without_a_year_on_the_request_the_folder_takes_lidarr_s(req, fake, tmp_path, monkeypatch):
+    # Lidarr's parser needs the year: "Alaskan Tapes - We All Speak in Poems" alone was an Unknown Artist.
+    req_db.update(req["id"], year=None)
+    _downloads(tmp_path, monkeypatch, "2005 - Based On A True Story")
+    races_db.add(req["id"], "soulseek", username="good", local_folder="2005 - Based On A True Story",
+                 state="importing", files=[{"filename": "01 Ernie.flac", "size": 3}])
+    fake.on("GET", f"{LIDARR}/album/619", {"id": 619, "releaseDate": "2005-06-27T00:00:00Z"})
+    fake.on("POST", f"{LIDARR}/command", {"id": 5})
+    asyncio.run(race.tick([], {}))
+    assert fake.body(fake.called("POST", f"{LIDARR}/command")[0])["path"].endswith(
+        "/Fat Freddy's Drop - Based on a True Story (2005)")
