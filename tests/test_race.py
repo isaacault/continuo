@@ -168,3 +168,38 @@ def test_a_racer_with_a_file_missing_or_short_keeps_waiting(req, fake, tmp_path,
     asyncio.run(race.tick([], {}))
     assert not fake.called("POST", f"{LIDARR}/command")
     assert races_db.for_request(req["id"])[0]["state"] == "downloading"
+
+
+def _downloads(tmp_path, monkeypatch, name):
+    import dataclasses
+    folder = tmp_path / name
+    folder.mkdir()
+    (folder / "01 Ernie.flac").write_bytes(b"x" * 3)
+    monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, slskd_downloads_dir=str(tmp_path)))
+    return folder
+
+
+def test_the_folder_is_named_artist_album_for_lidarr(req, fake, tmp_path, monkeypatch):
+    # Lidarr skipped "2016 - We All Speak In Poems" as an Unknown Artist: it reads the folder name.
+    _downloads(tmp_path, monkeypatch, "2005 - Based On A True Story")
+    races_db.add(req["id"], "soulseek", username="good", local_folder="2005 - Based On A True Story",
+                 files=[{"filename": "@@c\\x\\2005 - Based On A True Story\\01 Ernie.flac", "size": 3}])
+    fake.on("GET", f"{SLSKD}/transfers/downloads/good", {"directories": []})
+    fake.on("POST", f"{LIDARR}/command", {"id": 5})
+    asyncio.run(race.tick([], {}))
+    assert fake.body(fake.called("POST", f"{LIDARR}/command")[0])["path"] == \
+        "/data/downloads/soulseek/Fat Freddy's Drop - Based on a True Story"
+    assert (tmp_path / "Fat Freddy's Drop - Based on a True Story" / "01 Ernie.flac").exists()
+    (r,) = races_db.for_request(req["id"])
+    assert r["state"] == "importing" and r["local_folder"] == "Fat Freddy's Drop - Based on a True Story"
+
+
+def test_an_import_lidarr_skipped_is_renamed_and_sent_once_more(req, fake, tmp_path, monkeypatch):
+    _downloads(tmp_path, monkeypatch, "2005 - Based On A True Story")
+    races_db.add(req["id"], "soulseek", username="good", local_folder="2005 - Based On A True Story",
+                 state="importing", files=[{"filename": "01 Ernie.flac", "size": 3}])
+    fake.on("POST", f"{LIDARR}/command", {"id": 5})
+    asyncio.run(race.tick([], {}))
+    asyncio.run(race.tick([], {}))
+    assert len(fake.called("POST", f"{LIDARR}/command")) == 1, "once, not every tick"
+    assert races_db.for_request(req["id"])[0]["local_folder"] == "Fat Freddy's Drop - Based on a True Story"
