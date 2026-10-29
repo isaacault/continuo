@@ -98,8 +98,11 @@ async def lifespan(_app: FastAPI):
 
 
 def create_app(*, disable_workers: bool = False) -> FastAPI:
+    docs = config.settings.api_docs
     app = FastAPI(title="continuo", version=__version__, lifespan=lifespan,
-                  description="Search once, play what's in the library, request what isn't.")
+                  description="Search once, play what's in the library, request what isn't.",
+                  docs_url="/docs" if docs else None, redoc_url="/redoc" if docs else None,
+                  openapi_url="/openapi.json" if docs else None)
     app.state.disable_workers = disable_workers
     errors.install(app)
 
