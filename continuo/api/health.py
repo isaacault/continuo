@@ -4,7 +4,7 @@ healthcheck flag continuo's own failures, not Lidarr's."""
 import asyncio
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from .. import __version__
@@ -35,13 +35,12 @@ async def upstream_status() -> dict:
 
 @router.get("/", include_in_schema=False)
 async def root() -> dict:
-    """What a browser sees at https://music-api.ault.me — the API lives under /v1."""
-    return {"service": "continuo", "version": __version__, "health": "/v1/health",
-            "docs": "/docs"}
+    """What a browser sees at continuo's address: the API lives under /v1."""
+    return {"service": "continuo", "health": "/v1/health"}
 
 
 @router.get("/v1/health", tags=["health"])
-async def health() -> JSONResponse:
+async def health(request: Request) -> JSONResponse:
     db_ok = db_ping()
     loops = registry.snapshot()
     loops_ok = not any(v["stale"] for v in loops.values())
@@ -52,6 +51,10 @@ async def health() -> JSONResponse:
         status, code = "degraded", 200
     else:
         status, code = "ok", 200
+    if request.headers.get("x-forwarded-for"):
+        # Through Caddy, i.e. possibly from the internet: whether it's up, not what's behind it.
+        # health-push and the container's own check ask directly and get the whole picture.
+        return JSONResponse(status_code=code, content={"status": status})
     return JSONResponse(status_code=code, content={
         "status": status,
         "db": db_ok,
