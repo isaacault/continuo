@@ -9,6 +9,7 @@ queue. So continuo searches slskd itself, enqueues the best folder, and when it'
 Lidarr import it from the downloads folder, the path Soularr's downloads take."""
 import logging
 import os
+import re
 import shutil
 import time
 from typing import Optional
@@ -111,9 +112,11 @@ async def _follow(race: dict) -> None:
     wanted = {f["filename"] for f in race["files"]}
     mine = [t for t in transfers if t.get("filename") in wanted]
     states = [soulseek.finished(t) for t in mine]
-    if len(mine) < len(wanted) or any(s is None for s in states):
+    if len(mine) < len(wanted) and _all_on_disk(race):
+        pass    # Soularr clears finished transfers from slskd every cycle: the files are the word
+    elif len(mine) < len(wanted) or any(s is None for s in states):
         return
-    if not all(states):
+    elif not all(states):
         races_db.finish(race["id"], "failed", "A Soulseek transfer failed")
         req_db.add_event(race["request_id"], "race_failed", {"source": "soulseek"})
         return
@@ -124,6 +127,26 @@ async def _follow(race: dict) -> None:
         log.warning("race %s: Lidarr import of %s failed: %s", race["request_id"], path, e)
         return
     races_db.set_state(race["id"], "importing", f"Lidarr importing {race['local_folder']}")
+
+
+def _all_on_disk(race: dict) -> bool:
+    """Every file of the race in slskd's downloads folder, whole (slskd adds _<ticks> to a name
+    that was taken)."""
+    base = config.settings.slskd_downloads_dir
+    if not base or not race.get("local_folder"):
+        return False
+    folder = os.path.join(base, race["local_folder"])
+    try:
+        present = {name: os.path.getsize(os.path.join(folder, name)) for name in os.listdir(folder)}
+    except OSError:
+        return False
+    for f in race["files"]:
+        name = re.split(r"[\\/]", f["filename"])[-1]
+        stem, ext = os.path.splitext(name)
+        sizes = [size for n, size in present.items() if n == name or (n.startswith(stem + "_") and n.endswith(ext))]
+        if f.get("size") not in sizes:
+            return False
+    return True
 
 
 async def tick(rows: list[dict], queue_index: dict) -> None:
