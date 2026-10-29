@@ -40,6 +40,11 @@ def finish(race_id: int, state: str, detail: str | None = None) -> None:
                   (state, detail, now(), race_id))
 
 
+def set_folder(race_id: int, local_folder: str) -> None:
+    with connect() as c:
+        c.execute("UPDATE races SET local_folder=? WHERE id=?", (local_folder, race_id))
+
+
 def set_state(race_id: int, state: str, detail: str | None = None) -> None:
     with connect() as c:
         c.execute("UPDATE races SET state=?, detail=COALESCE(?, detail) WHERE id=?", (state, detail, race_id))
