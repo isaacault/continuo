@@ -16,6 +16,16 @@ def test_login_returns_session_and_facade_credential(client):
     assert client.get("/v1/me/library", headers=bearer(s)).json() == lib
 
 
+def test_speakers_get_the_receiver_address_when_one_is_set(client, monkeypatch):
+    import dataclasses
+
+    from continuo import config
+    make_user()
+    assert "receiverBaseUrl" not in login(client)["library"], "none unless configured"
+    monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, receiver_base_url="http://192.168.0.101"))
+    assert login(client)["library"]["receiverBaseUrl"] == "http://192.168.0.101"
+
+
 def test_bad_login_and_error_envelope(client):
     make_user()
     r = client.post("/v1/auth/login", json={"username": "isaac", "password": "nope"})
