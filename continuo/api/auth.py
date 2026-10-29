@@ -29,9 +29,13 @@ def _device_out(d: dict, current_id: str | None = None) -> dict:
 
 
 def library_credential(user: dict, device: dict) -> dict:
-    """What a Subsonic client needs — Polyphony adds it as a Server."""
-    return {"type": "subsonic", "baseUrl": config.settings.public_base_url,
-            "username": user["username"], "password": device["facade_secret"]}
+    """What a Subsonic client needs — Polyphony adds it as a Server. receiverBaseUrl, when set, is the
+    address to give speakers instead of baseUrl (a plain-HTTP LAN door: many can't do HTTPS)."""
+    out = {"type": "subsonic", "baseUrl": config.settings.public_base_url,
+           "username": user["username"], "password": device["facade_secret"]}
+    if config.settings.receiver_base_url:
+        out["receiverBaseUrl"] = config.settings.receiver_base_url
+    return out
 
 
 def _session(user: dict, device: dict, refresh: str) -> dict:

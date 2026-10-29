@@ -39,6 +39,9 @@ class Settings:
 
     # --- public face ---
     public_base_url: str = "https://music-api.ault.me"
+    # Where speakers on the LAN (DLNA, Cast) fetch from instead: many can't do HTTPS, so a plain-HTTP
+    # LAN address for the Subsonic façade (http://192.168.0.101). Handed to apps at sign-in; "" = none.
+    receiver_base_url: str = ""
     # The deep link a "ready to play" notification opens. {server} is the host of
     # public_base_url (how Polyphony recognises the Continuo-linked server), {albumId} the
     # Navidrome album id.
@@ -220,6 +223,7 @@ def load(env: dict | None = None) -> Settings:
     return Settings(
         db_path=db_path,
         public_base_url=_url(e, "PUBLIC_BASE_URL", "https://music-api.ault.me"),
+        receiver_base_url=_url(e, "RECEIVER_BASE_URL", ""),
         deep_link_template=_str(e, "DEEP_LINK_TEMPLATE", "polyphony://album/{server}/{albumId}"),
         trust_proxy=_bool(e, "TRUST_PROXY", True),
         api_docs=_bool(e, "API_DOCS", False),
