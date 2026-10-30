@@ -44,3 +44,41 @@ def test_musicbrainz_down_leaves_it_for_the_next_tick(client):
     with patch("continuo.upstream.musicbrainz.album_tracks", AsyncMock(side_effect=musicbrainz.Unavailable("busy"))):
         run(completeness.tick())
     assert track_counts.all_counts() == {}
+
+
+def test_untagged_albums_are_matched_by_name_then_counted(client):
+    from continuo.db import identity
+    lib_db.upsert_many([
+        {"navidrome_id": "nd-u", "name": "Geogaddi", "artist": "Boards of Canada", "song_count": 20, "folder": "BoC/Geogaddi"},
+        {"navidrome_id": "nd-s", "name": "One", "artist": "A", "song_count": 1, "folder": "_singles/A/One"},
+    ])
+    assert [a["navidrome_id"] for a in completeness.unmatched(lib_db.all_albums(), {})] == ["nd-u"]
+    names = AsyncMock(return_value="rg-geo")
+    tracks = AsyncMock(return_value=[{"title": str(i)} for i in range(23)])
+    with patch("continuo.upstream.musicbrainz.release_group_by_names", names), \
+         patch("continuo.upstream.musicbrainz.album_tracks", tracks):
+        run(completeness.tick())
+    names.assert_awaited_once_with("Boards of Canada", "Geogaddi")
+    assert identity.album_matches()["nd-u"]["mb_release_group_id"] == "rg-geo"
+    assert track_counts.all_counts() == {"rg-geo": 23}
+    assert completeness.unmatched(lib_db.all_albums(), identity.album_matches()) == [], "looked up once"
+
+
+def test_a_miss_isnt_looked_up_again_for_a_month(client):
+    from continuo.db import identity
+    lib_db.upsert_many([{"navidrome_id": "nd-u", "name": "X", "artist": "Y", "song_count": 3, "folder": "Y/X"}])
+    identity.set_album_match("nd-u", None)
+    assert completeness.unmatched(lib_db.all_albums(), identity.album_matches()) == []
+
+
+def test_matching_by_name_wants_a_sure_score_and_the_same_artist(client):
+    from continuo.upstream import musicbrainz
+    answer = {"releases": [
+        {"score": 100, "release-group": {"id": "rg-cover"}, "artist-credit": [{"name": "Tribute Band"}]},
+        {"score": 98, "release-group": {"id": "rg-real"}, "artist-credit": [{"name": "Boards of Canada"}]},
+    ]}
+    with patch("continuo.upstream.musicbrainz._get", AsyncMock(return_value=answer)):
+        assert run(musicbrainz.release_group_by_names("Boards of Canada", "Geogaddi")) == "rg-real"
+    with patch("continuo.upstream.musicbrainz._get", AsyncMock(return_value={"releases": [
+            {"score": 80, "release-group": {"id": "rg-meh"}, "artist-credit": [{"name": "Boards of Canada"}]}]})):
+        assert run(musicbrainz.release_group_by_names("Boards of Canada", "Geogaddi")) is None
