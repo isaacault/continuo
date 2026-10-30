@@ -258,8 +258,12 @@ async def add_artist(lookup_artist: dict) -> dict:
 
 
 async def albums_for_artist_id(artist_id: int) -> list[dict]:
-    """Every album for an artist, paginating (the default page is ~15 albums)."""
+    """Every album for an artist, paginating (the default page is ~15 albums). Lidarr 3 ignores
+    page/pageSize here and answers every page with the whole list, so a page that adds no album not
+    already seen ends it: an artist with 100+ albums (Drake: 106) otherwise looped forever, a
+    megabyte a page, until continuo ran out of memory and restarted (over a thousand times)."""
     all_albums: list[dict] = []
+    seen: set = set()
     page, page_size = 1, 100
     while True:
         r = await _client().get("/album", params={
@@ -267,9 +271,11 @@ async def albums_for_artist_id(artist_id: int) -> list[dict]:
         })
         r.raise_for_status()
         page_data = r.json()
-        if not page_data:
+        new = [a for a in page_data if a.get("id") not in seen]
+        if not new:
             break
-        all_albums.extend(page_data)
+        seen.update(a.get("id") for a in new)
+        all_albums.extend(new)
         if len(page_data) < page_size:
             break
         page += 1
