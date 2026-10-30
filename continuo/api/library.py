@@ -54,6 +54,25 @@ async def album_tracklist(request: Request, navidrome_id: str, user: CurrentUser
     return {"musicBrainzReleaseGroupId": rg, "tracks": await musicbrainz.album_tracks(rg)}
 
 
+@router.get("/partial")
+async def partial(user: CurrentUser = Depends(require_user)) -> dict:
+    """The account's library albums with fewer songs than the album has (MusicBrainz's count, filled
+    in the background, so new albums show once counted): {albums: [{navidromeAlbumId, have,
+    expected}]}. The apps' Albums leaves them out unless asked; the album page shows the rest."""
+    from ..db import library as lib_db
+    from ..db import track_counts
+    from ..library import completeness
+    from ..search import merge
+    index = merge._LibraryIndex(lib_db.all_albums(), user.id)
+    out = []
+    for p in completeness.partial(list(index.by_id.values()), track_counts.all_counts()):
+        mine = index.mine(p["album"])
+        if mine is None or any(o["navidromeAlbumId"] == mine for o in out):
+            continue
+        out.append({"navidromeAlbumId": mine, "have": p["have"], "expected": p["expected"]})
+    return {"albums": out}
+
+
 @router.get("/singles")
 async def singles(user: CurrentUser = Depends(require_user)) -> dict:
     """The account's library albums that hold single songs rather than the album (songs requested
