@@ -270,6 +270,28 @@ async def release_group_for_title(artist_mbid: str, title: str) -> Optional[str]
     return None
 
 
+async def release_group_by_names(artist: str, title: str) -> Optional[str]:
+    """The release group of [artist]'s release called [title], by name alone (no artist MBID: an
+    untagged library album's): MusicBrainz's release search, a near-certain score, and the credit's
+    name the library's. None when nothing is that sure."""
+    from ..requests.normalise import normalise
+    a = (artist or "").replace("\\", " ").replace('"', " ").strip()
+    t = (title or "").replace("\\", " ").replace('"', " ").strip()
+    if not a or not t:
+        return None
+    try:
+        data = await _get("/release", {"query": f'release:"{t}" AND artist:"{a}"', "limit": 5})
+    except (httpx.HTTPError, ValueError):
+        return None
+    want = normalise(a)
+    for rel in data.get("releases") or []:
+        rg = (rel.get("release-group") or {}).get("id")
+        credited, _ = _credit(rel.get("artist-credit") or [])
+        if rg and int(rel.get("score") or 0) >= 95 and credited and want in (normalise(credited), normalise(credited.split(" feat")[0])):
+            return rg
+    return None
+
+
 def _credit(credits: list[dict]) -> tuple[Optional[str], Optional[str]]:
     """(the credited name as printed, the first artist's MBID)."""
     name = "".join((c.get("name") or (c.get("artist") or {}).get("name") or "") + (c.get("joinphrase") or "")
