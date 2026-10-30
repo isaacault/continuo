@@ -3,9 +3,8 @@
 import logging
 from datetime import timedelta
 
-from ..db import identity
+from ..db import identity, track_counts
 from ..db import library as lib_db
-from ..db import track_counts
 from ..db.conn import seconds_since
 from ..library.singles import is_singles
 
