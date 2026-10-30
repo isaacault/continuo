@@ -39,6 +39,15 @@ def test_albums_for_artist_paginates(fake):
     assert [c.url.params["page"] for c in fake.calls] == ["1", "2"]
 
 
+def test_albums_for_artist_stops_when_lidarr_ignores_paging(fake):
+    # Lidarr 3 answers every page with the whole list: 106 albums for Drake, again and again.
+    everything = [{"id": i} for i in range(106)]
+    fake.on("GET", f"{LIDARR}/album", handler=lambda r: everything)
+    albums = run(lidarr.albums_for_artist_id(8))
+    assert [a["id"] for a in albums] == list(range(106))
+    assert len(fake.calls) == 2, "the second page brought nothing new: done"
+
+
 def test_add_artist_never_follows(fake):
     fake.on("POST", f"{LIDARR}/artist", handler=lambda r: {"id": 7, **fake.body(r)})
     created = run(lidarr.add_artist({"artistName": "X", "foreignArtistId": "a-1",
