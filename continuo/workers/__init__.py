@@ -2,7 +2,7 @@
 import asyncio
 
 from .. import config
-from ..library import links
+from ..library import completeness, links
 from ..requests import tracks
 from . import heartbeat, reconcile, registry, scan, status
 
@@ -24,6 +24,8 @@ def start() -> list[asyncio.Task]:
         "tracks": (lambda: config.settings.track_poll_seconds, tracks.tick),
         # Discovery pages built ahead (Explore, Home): checked every 20 min, rebuilt when 2.5 h old.
         "discover": (lambda: 1200, _warm_discover),
+        # Which library albums are complete (GET /v1/library/partial): a few counted every 5 min.
+        "completeness": (lambda: 300, completeness.tick),
     }
     tasks = []
     for name, (interval, body) in loops.items():
