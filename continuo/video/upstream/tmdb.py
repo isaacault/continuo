@@ -99,3 +99,16 @@ async def series(tmdb_id: int) -> dict:
 
 async def season(tmdb_id: int, number: int) -> dict:
     return await _get(f"/tv/{tmdb_id}/season/{number}")
+
+
+async def trending() -> list[dict]:
+    """This week's trending films and series (people left out)."""
+    body = await _get("/trending/all/week")
+    return [n for n in (normalize(h) for h in body.get("results") or []) if n]
+
+
+async def popular(kind: str) -> list[dict]:
+    """Popular films ("movie") or series ("series") in the configured region."""
+    path = "/movie/popular" if kind == "movie" else "/tv/popular"
+    body = await _get(path, {"region": config.settings.tmdb_region})
+    return [n for n in (normalize(h, "movie" if kind == "movie" else "tv") for h in body.get("results") or []) if n]
