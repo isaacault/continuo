@@ -193,14 +193,19 @@ The web app is built first: it covers three of the six targets.
 
 Each step is a PR, with music's tests green throughout.
 
-1. **Module registry, music only.**
-   - `core` and the registry, `CONTINUO_MODULES` defaulting to `music`, migrations recorded per module (renumbered, no schema change).
-   - No behaviour changes; music's routes and loops register through the registry.
-2. **Move music code under `continuo/music/`.** Pure moves; imports updated. Each folder in `upstream/`, `library/`, `search/`, `requests/` and `fetch/` is assigned to `core` or `music`.
-3. **Generalise requests.**
-   - Add `domain` (`music` or `video`) and an `ids` JSON column.
-   - Music's `mb_release_group_id` and Lidarr columns stay for existing rows, nullable for video.
-   - The state machine and inbox are in `core`; each domain's pipeline (Lidarr and Soulseek, Radarr and Sonarr) is a module.
+1. **Module registry, music only.** Done: #89.
+   - `CONTINUO_MODULES` (unset: `music`; empty: core alone).
+   - Each part gives its routers, loops, start-up work and sign-in contribution.
+   - Migrations stay in one folder for now; a new part's migrations get their own version range (video: 1000+), recorded in the same `schema_migrations`. A part that's off never runs them.
+2. **Core alone loads no music code.** Done: #90, as boundaries rather than file moves.
+   - Each part gives `/v1/health` its own upstream checks.
+   - Music's policy check, library refresh and nightly work live in `continuo/music/`.
+   - A fresh-interpreter test asserts that core alone imports none of Lidarr, Navidrome, slskd, Soularr, MusicBrainz, the library index, search or fetch.
+   - Music files move under `continuo/music/` only when they're next touched: the tested boundary is what matters at runtime.
+3. **Requests per part, lifecycle in core.** Revised from "generalise the requests table": that would mean rebuilding a large live SQLite table (its `mb_release_group_id` is NOT NULL), and would give a disabled part tables it doesn't use.
+   - Each part owns its request table: music's `requests` as it is, video's `video_requests`.
+   - `core` owns the shared vocabulary (states, `still_looking`, attention), request events, inbox notifications and the combined listing.
+   - `GET /v1/requests` asks each enabled part for its requests and merges them by time. Each item carries `domain`, and actions route to the owning part by an ID prefix (`v:12` for video).
 4. **`video` module, movies.**
    - Jellyfin link, users and tokens, the video index, TMDB search, movie pages, movie requests through Radarr.
    - Sign-in answer gains `video`.
