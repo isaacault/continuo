@@ -2,13 +2,12 @@
 is an outage (Uptime Kuma → ntfy: the one ntfy path). Plus the nightly job: library index
 refresh and policy check (Home Assistant alert only if something is wrong)."""
 import logging
-from datetime import datetime
 
 import httpx
 
 from .. import config
-from ..upstream import homeassistant, http
-from . import index, registry
+from ..upstream import http
+from . import registry
 
 log = logging.getLogger("continuo")
 
@@ -23,34 +22,3 @@ async def beat() -> None:
             url, params={"status": "up", "msg": "OK" if not stale else "stale"})
     except httpx.HTTPError as e:
         log.warning("Uptime Kuma push failed: %s", e)
-
-
-_last_nightly: str | None = None
-
-
-def mark_nightly_done() -> None:
-    """Startup already refreshed the index and ran the policy check; skip today's nightly run
-    if the hour has already passed."""
-    global _last_nightly
-    if datetime.now().hour >= config.settings.library_index_hour:
-        _last_nightly = datetime.now().date().isoformat()
-
-
-async def nightly() -> None:
-    """Runs once per local day at/after LIBRARY_INDEX_HOUR."""
-    global _last_nightly
-    today = datetime.now().date().isoformat()
-    if _last_nightly == today or datetime.now().hour < config.settings.library_index_hour:
-        return
-    _last_nightly = today
-    await index.refresh()
-    from ..library import cache
-    cache.evict()
-    from ..api.admin import policy_check
-    report = await policy_check()
-    problems = [c for c in report["checks"] if c["status"] == "warn"]
-    if problems:
-        await homeassistant.notify(
-            title="continuo policy check",
-            message="; ".join(c["message"] for c in problems),
-            tag="continuo-policy", kind="policy")
