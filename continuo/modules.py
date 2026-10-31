@@ -7,7 +7,7 @@ from types import ModuleType
 from . import config
 
 # Name -> the package that defines it: routers(), loops(), on_start(), sign_in(user, device).
-KNOWN = {"music": "continuo.music"}
+KNOWN = {"music": "continuo.music", "video": "continuo.video"}
 
 
 def enabled() -> list[str]:

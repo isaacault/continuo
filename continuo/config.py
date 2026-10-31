@@ -70,6 +70,20 @@ class Settings:
     metadata_profile_id: int = 1
     trigger_album_search: bool = True
 
+    # --- Video (the video part, docs/design/video.md) ---
+    jellyfin_url: str = "http://localhost:8096"
+    jellyfin_api_key: str = ""
+    # Where clients reach Jellyfin to stream (through Caddy); continuo itself uses jellyfin_url.
+    video_public_base_url: str = ""
+    tmdb_api_key: str = ""          # a v3 API key, or a v4 read access token (eyJ…)
+    tmdb_language: str = "en-GB"
+    tmdb_region: str = "GB"
+    radarr_url: str = "http://localhost:7878"
+    radarr_api_key: str = ""
+    radarr_root_folder: str = "/movies"
+    radarr_quality_profile_id: int = 1
+    video_index_seconds: int = 900
+
     # --- Navidrome ---
     navidrome_url: str = "http://localhost:4533"
     navidrome_music_root: str = "/music"
@@ -246,6 +260,17 @@ def load(env: dict | None = None) -> Settings:
         quality_profile_id=_int(e, "QUALITY_PROFILE_ID", 1),
         metadata_profile_id=_int(e, "METADATA_PROFILE_ID", 1),
         trigger_album_search=_bool(e, "TRIGGER_ALBUM_SEARCH", True),
+        jellyfin_url=_url(e, "JELLYFIN_URL", "http://localhost:8096"),
+        jellyfin_api_key=_str(e, "JELLYFIN_API_KEY"),
+        video_public_base_url=_url(e, "VIDEO_PUBLIC_BASE_URL", ""),
+        tmdb_api_key=_str(e, "TMDB_API_KEY"),
+        tmdb_language=_str(e, "TMDB_LANGUAGE", "en-GB"),
+        tmdb_region=_str(e, "TMDB_REGION", "GB"),
+        radarr_url=_url(e, "RADARR_URL", "http://localhost:7878"),
+        radarr_api_key=_str(e, "RADARR_API_KEY"),
+        radarr_root_folder=_str(e, "RADARR_ROOT_FOLDER", "/movies"),
+        radarr_quality_profile_id=_int(e, "RADARR_QUALITY_PROFILE_ID", 1),
+        video_index_seconds=_int(e, "VIDEO_INDEX_SECONDS", 900),
         navidrome_url=_url(e, "NAVIDROME_URL", "http://localhost:4533"),
         navidrome_music_root=_url(e, "NAVIDROME_MUSIC_ROOT", "/music"),
         navidrome_service_user=_str(e, "NAVIDROME_SERVICE_USER", "continuo-svc"),
