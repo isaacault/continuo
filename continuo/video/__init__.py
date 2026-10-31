@@ -7,7 +7,7 @@ from typing import Callable
 
 def routers() -> list:
     from . import api
-    return [api.router]
+    return [api.router, api.admin_router]
 
 
 def loops() -> dict[str, tuple[Callable[[], float], Callable]]:
@@ -31,4 +31,10 @@ def health_checks() -> dict:
 
 
 def sign_in(user: dict, device: dict) -> dict:
-    return {}          # the per-device Jellyfin token comes with the accounts step (§7.1)
+    """Where this device's Jellyfin session comes from (issued on first ask, as it needs Jellyfin)."""
+    return {"video": {"session": "/v1/video/session"}}
+
+
+async def on_device_signed_out(device_id: str) -> None:
+    from . import accounts
+    await accounts.device_signed_out(device_id)

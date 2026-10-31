@@ -2,11 +2,12 @@
 /v1/video; the TV/web/phone clients use it with the same continuo sign-in as music's apps."""
 import asyncio
 
+import httpx
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from ..artwork import public_url
-from ..auth.deps import CurrentUser, require_user
+from ..auth.deps import CurrentUser, require_admin, require_user
 from ..errors import ApiError
 from . import db, index
 from .upstream import tmdb
@@ -126,3 +127,33 @@ async def delete_request(request_id: int, user: CurrentUser = Depends(require_us
     if not req or (req["user_id"] != user.id and user.role != "admin"):
         raise ApiError(404, "not_found", "No such request.")
     db.delete(request_id)
+
+
+@router.get("/session")
+async def video_session(user: CurrentUser = Depends(require_user)) -> dict:
+    """This device's Jellyfin session (created on first ask): stream and report progress there."""
+    from ..db import devices as devices_db
+    from . import accounts
+    device = devices_db.get(user.device_id) or {}
+    try:
+        return await accounts.session(user.id, user.username, user.device_id, device.get("name") or "device")
+    except httpx.HTTPError as e:
+        raise ApiError(503, "jellyfin_unavailable", "Jellyfin isn't answering right now.", True) from e
+
+
+admin_router = APIRouter(prefix="/v1/admin/video", tags=["admin"])
+
+
+class LinkIn(BaseModel):
+    userId: int
+    jellyfinUsername: str
+    jellyfinPassword: str
+
+
+@admin_router.post("/accounts")
+async def link_account(body: LinkIn, _admin: CurrentUser = Depends(require_admin)) -> dict:
+    """Links a continuo account to an existing Jellyfin user (so its watch history carries on)."""
+    from . import accounts
+    acct = await accounts.link(body.userId, body.jellyfinUsername, body.jellyfinPassword)
+    return {"userId": acct["user_id"], "jellyfinUserId": acct["jellyfin_user_id"],
+            "jellyfinUsername": acct["jellyfin_username"], "managed": bool(acct["managed"])}
