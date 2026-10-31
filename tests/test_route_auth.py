@@ -12,6 +12,7 @@ PUBLIC = {
     "/v1/auth/refresh": "checks the refresh token itself",
     "/v1/artwork": "cover images in <img> tags; allow-listed sources, rate-limited",
     "/v1/events": "SSE: checks the token itself (Bearer, or ?token= for EventSource)",
+    "/v1/play-now/{stream_id}/audio": "checks the token itself (Bearer, or a speaker's signed link: stream, device, expiry)",
     "/rest/getOpenSubsonicExtensions": "OpenSubsonic requires it unauthenticated",
     "/rest/getOpenSubsonicExtensions.view": "the same, by its .view name",
     "/internal/auth/subsonic": "Caddy's forward_auth; never routed from outside (Caddy answers 404)",
