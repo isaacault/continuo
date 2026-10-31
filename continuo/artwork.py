@@ -41,7 +41,9 @@ log = logging.getLogger("continuo")
 # Hosts a `src` may name (what lidarr.coverart_url / _best_image produce).
 SOURCE_HOSTS = frozenset({"coverartarchive.org", "images.lidarr.audio", "imagecache.lidarr.audio",
                           # Deezer's covers and artist pictures (search.ranked)
-                          "cdn-images.dzcdn.net", "e-cdns-images.dzcdn.net"})
+                          "cdn-images.dzcdn.net", "e-cdns-images.dzcdn.net",
+                          # TMDB's posters and backdrops (the video part)
+                          "image.tmdb.org"})
 # Hosts (and their subdomains) only a redirect from a source host may lead to.
 REDIRECT_DOMAINS = ("archive.org",)
 MAX_REDIRECTS = 5
