@@ -80,6 +80,25 @@ async def movie(tmdb_id: int, _user: CurrentUser = Depends(require_user)) -> dic
             "trailerYouTubeKey": trailer, "availability": availability("movie", tmdb_id)}
 
 
+@router.get("/home")
+async def home(user: CurrentUser = Depends(require_user)) -> dict:
+    """What the video apps open on: Continue Watching and Next Up (Jellyfin's, for this account's
+    Jellyfin user), Recently Added, and this account's requests on their way. Without a Jellyfin
+    user yet (GET /v1/video/session makes one), only the requests."""
+    from .upstream import jellyfin
+    jf_user = await _jellyfin_user(user)
+    shelves = {"continueWatching": [], "nextUp": [], "recentlyAdded": []}
+    if jf_user:
+        calls = {"continueWatching": jellyfin.resume(jf_user), "nextUp": jellyfin.next_up(jf_user),
+                 "recentlyAdded": jellyfin.latest(jf_user)}
+        results = await asyncio.gather(*calls.values(), return_exceptions=True)
+        for name, result in zip(calls, results, strict=True):
+            if not isinstance(result, BaseException):
+                shelves[name] = result
+    onTheWay = [_request_out(r) for r in db.for_user(user.id) if r["status"] in db.ACTIVE]
+    return {**shelves, "requests": onTheWay, "linked": jf_user is not None}
+
+
 async def _jellyfin_user(user: CurrentUser) -> str | None:
     from . import accounts
     acct = accounts.account(user.id)
