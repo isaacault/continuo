@@ -102,7 +102,7 @@ def test_requests_refused_or_failing(vclient, fake):
     make_user()
     s = login(vclient)
     assert vclient.post("/v1/video/requests", json={"kind": "movie", "tmdbId": 603}, headers=bearer(s)).status_code == 409
-    assert vclient.post("/v1/video/requests", json={"kind": "series", "tmdbId": 1396}, headers=bearer(s)).status_code == 400
+    assert vclient.post("/v1/video/requests", json={"kind": "album", "tmdbId": 1396}, headers=bearer(s)).status_code == 400
     fake.on("GET", f"{TMDB}/movie/604", {"id": 604, "title": "The Matrix Reloaded"})
     fake.on("GET", f"{RADARR}/movie", status=500, json_body={})
     rid = vclient.post("/v1/video/requests", json={"kind": "movie", "tmdbId": 604}, headers=bearer(s)).json()["request"]["id"]

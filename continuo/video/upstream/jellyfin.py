@@ -94,3 +94,24 @@ async def delete_device(device_id: str) -> None:
     r = await _client().delete("/Devices", params={"id": device_id})
     if r.status_code not in (200, 204, 404):
         r.raise_for_status()
+
+
+# --- episodes (series and season pages) --------------------------------------------------------
+
+async def episodes(series_jellyfin_id: str, user_id: str | None = None, season: int | None = None) -> list[dict]:
+    """The series' episodes in Jellyfin: {season, episode, jellyfinId, title, played, positionSeconds}
+    (watch state only with a user, the account's Jellyfin user)."""
+    params = {"Fields": "ParentIndexNumber,IndexNumber"}
+    if user_id:
+        params["UserId"] = user_id
+    if season is not None:
+        params["Season"] = season
+    r = await _client().get(f"/Shows/{series_jellyfin_id}/Episodes", params=params)
+    r.raise_for_status()
+    out = []
+    for e in r.json().get("Items") or []:
+        data = e.get("UserData") or {}
+        out.append({"season": e.get("ParentIndexNumber"), "episode": e.get("IndexNumber"), "jellyfinId": e.get("Id"),
+                    "title": e.get("Name"), "played": bool(data.get("Played")),
+                    "positionSeconds": int((data.get("PlaybackPositionTicks") or 0) / 10_000_000)})
+    return out
