@@ -157,8 +157,10 @@ async def next_up(user_id: str, limit: int = 12) -> list[dict]:
 
 
 async def latest(user_id: str, limit: int = 16) -> list[dict]:
-    r = await _client().get(f"/Users/{user_id}/Items/Latest", params={
-        "Limit": limit, "IncludeItemTypes": "Movie,Series", "Fields": "ProviderIds"})
+    """Films and series, newest first. Not /Items/Latest: on Jellyfin 12 that answers nothing when
+    asked for Movie,Series (it groups episodes under their series first), and only series without."""
+    r = await _client().get("/Items", params={
+        "userId": user_id, "Recursive": "true", "IncludeItemTypes": "Movie,Series",
+        "SortBy": "DateCreated", "SortOrder": "Descending", "Limit": limit, "Fields": "ProviderIds"})
     r.raise_for_status()
-    body = r.json()
-    return [summarize(i) for i in (body if isinstance(body, list) else body.get("Items") or [])]
+    return [summarize(i) for i in r.json().get("Items") or []]
