@@ -14,11 +14,19 @@ _NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 
 
 def available() -> list[tuple[int, str, str]]:
+    """core's (and music's, from before parts) in continuo/migrations, then each enabled part's own
+    in continuo/<part>/migrations (video: 1000+): a part that's off never gets its tables."""
+    folders = [resources.files("continuo").joinpath("migrations")]
+    for part in config.settings.modules:
+        own = resources.files("continuo").joinpath(part, "migrations")
+        if own.is_dir():
+            folders.append(own)
     out = []
-    for entry in resources.files("continuo").joinpath("migrations").iterdir():
-        m = _NAME.match(entry.name)
-        if m:
-            out.append((int(m.group(1)), entry.name, entry.read_text()))
+    for folder in folders:
+        for entry in folder.iterdir():
+            m = _NAME.match(entry.name)
+            if m:
+                out.append((int(m.group(1)), entry.name, entry.read_text()))
     return sorted(out)
 
 
