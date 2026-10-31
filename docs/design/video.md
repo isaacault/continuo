@@ -206,12 +206,34 @@ Each step is a PR, with music's tests green throughout.
    - Each part owns its request table: music's `requests` as it is, video's `video_requests`.
    - `core` owns the shared vocabulary (states, `still_looking`, attention), request events, inbox notifications and the combined listing.
    - `GET /v1/requests` asks each enabled part for its requests and merges them by time. Each item carries `domain`, and actions route to the owning part by an ID prefix (`v:12` for video).
-4. **`video` module, movies.**
-   - Jellyfin link, users and tokens, the video index, TMDB search, movie pages, movie requests through Radarr.
-   - Sign-in answer gains `video`.
-   - Caddy `forward_auth` for Jellyfin on the homelab, as its own homelab change with the user's go-ahead.
-5. **Series:** Sonarr, seasons and episodes, partial seasons, Next Up and Continue Watching.
-6. **Web client MVP** (TV layout first): sign in, home, search, title pages, play (direct play), request, inbox.
+4. **`video` module, films.** Done: #91 (foundation: per-part migrations, tables, config, the
+   Jellyfin, TMDB and Radarr clients, the index loop), #92 (search, film pages, requests through
+   Radarr, the status loop and its notifications), #93 (`/v1/video/session`: Jellyfin users and a
+   token per device).
+   - Existing Jellyfin users are never reset: an admin links one once with its password
+     (`POST /v1/admin/video/accounts`); continuo keeps it to sign new devices in. An empty password
+     is allowed: the household's Jellyfin user has none, on purpose.
+   - `forward_auth` in front of Jellyfin is not needed yet: `watch.ault.me` stays private (LAN and
+     tailnet), and Jellyfin checks its own tokens.
+5. **Series.** Done: #94 (Sonarr, season and episode pages, partial seasons, watch state), #95
+   (`/v1/video/home`: Continue Watching, Next Up, Recently Added, requests on their way), #97
+   (`/v1/video/discover`: trending and popular).
+6. **Web client MVP.** Done in the Polyorama repository (TV and desktop layouts, sign-in, home,
+   search, title pages, direct play with an HLS fallback, requests). continuo #96 adds opt-in CORS
+   for it. A headless-Chromium test runs it against fakes; it hasn't met the TV yet.
+
+**What the real servers taught** (homelab, 31 Oct 2026):
+- **Jellyfin 12 refuses the old key forms.** `X-Emby-Token` and `?api_key=` answer 401; only
+  `Authorization: MediaBrowser Token="…"` and `?ApiKey=` work (#100). The health check pings
+  `/System/Info`, which needs the key, not the public endpoint, which passed with a refused key.
+- **Jellyfin 12's `Items/Latest` answers nothing for `Movie,Series`;** Recently Added asks `/Items`
+  sorted by `DateCreated` instead (#101).
+- **A part's migrations must be package data** (#99): `importlib.resources` reads them, and
+  `pip install .` had shipped only core's. `tests/test_packaging.py` now checks every part.
+- **The TVs' browsers are old:** Chromium 69 (Tizen 5.5, 2020) to 85 (Tizen 6.5, 2022). A rule
+  naming `:focus-visible` (86+) is dropped whole there, which would have hidden the remote's
+  selection; `aspect-ratio`, `inset` and flex `gap` are also too new. Polyorama builds for
+  Chromium 69, and a test keeps that CSS out.
 7. **Compose profiles and docs for others:**
    - `--profile music`: continuo, Navidrome, Lidarr, slskd.
    - `--profile video`: continuo, Jellyfin, Radarr, Sonarr, Prowlarr, qBittorrent, Bazarr.
@@ -222,11 +244,14 @@ Each step is a PR, with music's tests green throughout.
 - idle memory and CPU of continuo with `music`, with `video` and with both;
 - request latency for search and title pages.
 The budget is continuo under 200 MB resident with both modules on the homelab, inside its 256 MiB limit.
+With both on (31 Oct 2026, 14 films and 9 series indexed): 118 MB resident, peak 155 MB, idle CPU
+under 1%. Inside the budget.
 
 ## 12. Open questions
 
-1. A public video host name (`watch.ault.me`?), and whether Jellyfin's own clients (Findroid, Swiftfin, the TV app) should keep working directly while the new clients are built. That's easy: they'd just need a Jellyfin login.
+1. A public video host name. For now `watch.ault.me` (Jellyfin) and `polyorama.ault.me` (the web
+   app) are private, LAN and tailnet only; Jellyfin's own clients keep working directly.
 2. Which TMDB region and language for titles and trending (en-GB?).
 3. Who may request video: everyone, or per-account quotas like Jellyseerr's?
 4. Should series requests default to "future episodes too" or "just what's asked"?
-5. The video apps' repository name.
+5. ~~The video apps' repository name.~~ **Polyorama** ("many views", Polyphony's sibling).
