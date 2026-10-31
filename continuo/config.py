@@ -83,6 +83,8 @@ class Settings:
     radarr_root_folder: str = "/movies"
     radarr_quality_profile_id: int = 1
     video_index_seconds: int = 900
+    # Notifications' links into the video app (its URL scheme; the app's name is still to be chosen).
+    video_deep_link_scheme: str = "watch"
 
     # --- Navidrome ---
     navidrome_url: str = "http://localhost:4533"
@@ -271,6 +273,7 @@ def load(env: dict | None = None) -> Settings:
         radarr_root_folder=_str(e, "RADARR_ROOT_FOLDER", "/movies"),
         radarr_quality_profile_id=_int(e, "RADARR_QUALITY_PROFILE_ID", 1),
         video_index_seconds=_int(e, "VIDEO_INDEX_SECONDS", 900),
+        video_deep_link_scheme=_str(e, "VIDEO_DEEP_LINK_SCHEME", "watch"),
         navidrome_url=_url(e, "NAVIDROME_URL", "http://localhost:4533"),
         navidrome_music_root=_url(e, "NAVIDROME_MUSIC_ROOT", "/music"),
         navidrome_service_user=_str(e, "NAVIDROME_SERVICE_USER", "continuo-svc"),

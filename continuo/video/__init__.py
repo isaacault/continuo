@@ -6,13 +6,16 @@ from typing import Callable
 
 
 def routers() -> list:
-    return []          # title pages, search and requests come in the next step (§11, step 4)
+    from . import api
+    return [api.router]
 
 
 def loops() -> dict[str, tuple[Callable[[], float], Callable]]:
     from .. import config
-    from . import index
-    return {"video_index": (lambda: config.settings.video_index_seconds, index.refresh)}
+    from . import index, requests
+    return {"video_index": (lambda: config.settings.video_index_seconds, index.refresh),
+            # Film requests through Radarr to Jellyfin: checked every minute.
+            "video_requests": (lambda: 60, requests.tick)}
 
 
 def on_start() -> list[asyncio.Task]:

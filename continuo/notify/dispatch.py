@@ -38,6 +38,20 @@ def notification_out(n: dict) -> dict:
     }
 
 
+async def to_user(uid: int, *, type: str, title: str, body: str, action: dict, tag: str,
+                  request_id: int | None = None) -> dict:
+    """Push (Home Assistant) and store one inbox notification, then send it over SSE: what every
+    part's events go through (music's requests below, video's in continuo.video)."""
+    user = users_db.get_by_id(uid)
+    pushed = await homeassistant.notify(title=title, message=body, tag=tag, click_action=action.get("deepLink"),
+                                        kind=type, username=user["username"] if user else None)
+    n = notif_db.create(user_id=uid, type=type, title=title, body=body, action=action, request_id=request_id,
+                        delivered_via=["homeassistant"] if pushed else [])
+    if events.publish("notification.new", notification_out(n), uid):
+        notif_db.mark_delivered(n["id"], "sse")
+    return n
+
+
 async def request_event(row: dict, type: str, detail: str = "") -> dict | None:
     """Notify the request's owner (or every admin for an orphaned request)."""
     title_t, body_t = _TEMPLATES[type]
