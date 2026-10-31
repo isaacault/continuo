@@ -57,3 +57,40 @@ async def library_items() -> list[dict]:
             break
         start += PAGE
     return out
+
+
+# --- users and per-device tokens (docs/design/video.md §7.1) ---------------------------------
+
+def _device_auth(device_id: str, device_name: str) -> str:
+    from ... import __version__
+    safe = (device_name or "device").replace('"', "'")
+    return f'MediaBrowser Client="continuo", Device="{safe}", DeviceId="{device_id}", Version="{__version__}"'
+
+
+async def find_user(name: str) -> dict | None:
+    r = await _client().get("/Users")
+    r.raise_for_status()
+    return next((u for u in r.json() if (u.get("Name") or "").casefold() == name.casefold()), None)
+
+
+async def create_user(name: str, password: str) -> dict:
+    r = await _client().post("/Users/New", json={"Name": name, "Password": password})
+    r.raise_for_status()
+    return r.json()
+
+
+async def authenticate(username: str, password: str, device_id: str, device_name: str) -> dict:
+    """A user token for this device: {"token", "userId"}. Raises httpx.HTTPStatusError (401) on a
+    wrong password."""
+    r = await _client().post("/Users/AuthenticateByName", json={"Username": username, "Pw": password},
+                             headers={"Authorization": _device_auth(device_id, device_name), "X-Emby-Token": ""})
+    r.raise_for_status()
+    body = r.json()
+    return {"token": body["AccessToken"], "userId": (body.get("User") or {}).get("Id")}
+
+
+async def delete_device(device_id: str) -> None:
+    """Signs the device out of Jellyfin (its token stops working)."""
+    r = await _client().delete("/Devices", params={"id": device_id})
+    if r.status_code not in (200, 204, 404):
+        r.raise_for_status()

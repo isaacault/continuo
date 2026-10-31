@@ -81,6 +81,8 @@ async def refresh(body: RefreshIn) -> dict:
 async def logout(user: CurrentUser = Depends(require_user)) -> dict:
     devices_db.revoke(user.device_id)
     facade.invalidate(user.username)
+    from .. import modules
+    await modules.device_signed_out(user.device_id)
     return {"ok": True}
 
 
@@ -144,6 +146,8 @@ async def revoke_device(device_id: str, user: CurrentUser = Depends(require_user
         raise ApiError(404, "not_found", "Device not found.")
     devices_db.revoke(device_id)
     facade.invalidate_all()
+    from .. import modules
+    await modules.device_signed_out(device_id)
     log.info("device %s revoked by %s", device_id, user.username)
     return {"ok": True}
 
@@ -154,6 +158,8 @@ async def revoke_others(user: CurrentUser = Depends(require_user)) -> dict:
     for d in devices_db.list_for_user(user.id):
         if d["id"] != user.device_id and devices_db.revoke(d["id"]):
             n += 1
+            from .. import modules
+            await modules.device_signed_out(d["id"])
     facade.invalidate(user.username)
     return {"ok": True, "revoked": n}
 

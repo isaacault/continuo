@@ -18,6 +18,20 @@ def is_on(name: str) -> bool:
     return name in config.settings.modules
 
 
+async def device_signed_out(device_id: str) -> None:
+    """Tells each part a device was signed out (video revokes its Jellyfin token). Best-effort: a
+    part's failure is logged, never stops the sign-out."""
+    import logging
+    for part in load():
+        hook = getattr(part, "on_device_signed_out", None)
+        if hook is None:
+            continue
+        try:
+            await hook(device_id)
+        except Exception:  # noqa: BLE001
+            logging.getLogger("continuo").exception("%s: device sign-out hook failed", part.__name__)
+
+
 def load() -> list[ModuleType]:
     """The enabled parts' packages, imported now (and only those)."""
     unknown = [m for m in config.settings.modules if m not in KNOWN]
