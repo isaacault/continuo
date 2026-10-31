@@ -9,7 +9,6 @@ from fastapi.responses import JSONResponse
 
 from .. import __version__
 from ..db.conn import ping as db_ping
-from ..upstream import lidarr, navidrome, slskd
 from ..workers import registry
 
 router = APIRouter()
@@ -22,11 +21,11 @@ async def upstream_status() -> dict:
     global _upstream_cache
     if time.monotonic() - _upstream_cache[0] < _UPSTREAM_TTL and _upstream_cache[1]:
         return _upstream_cache[1]
-    checks = {"navidrome": navidrome.ping(), "lidarr": lidarr.ping()}
-    if slskd.enabled():
-        checks["slskd"] = slskd.ping()
-        # slskd can be up and off the Soulseek network: Play now and song requests then fail.
-        checks["soulseek"] = slskd.logged_in()
+    # Each part checks its own upstreams (music: Navidrome, Lidarr, slskd).
+    from .. import modules
+    checks = {}
+    for part in modules.load():
+        checks.update(part.health_checks())
     results = await asyncio.gather(*checks.values(), return_exceptions=True)
     out = {name: ("ok" if r is True else "down") for name, r in zip(checks, results, strict=True)}
     _upstream_cache = (time.monotonic(), out)

@@ -54,3 +54,18 @@ def test_a_part_thats_off_isnt_imported(fake):
     config.reload(dict(os.environ, CONTINUO_MODULES=""))
     modules.load()
     assert "continuo.music" not in sys.modules
+
+
+def test_core_alone_loads_no_music_code(fake):
+    """The point of parts (design §2): a server without music doesn't carry it. Checked in a fresh
+    interpreter, as the test process has music loaded already."""
+    import subprocess
+    code = ("import sys; from continuo.main import create_app; create_app(disable_workers=True); "
+            "print(' '.join(sorted(m for m in sys.modules if m.startswith('continuo.'))))")
+    env = dict(os.environ, CONTINUO_MODULES="")
+    loaded = set(subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
+                                check=True).stdout.split())
+    music = {"continuo.upstream.lidarr", "continuo.upstream.navidrome", "continuo.upstream.slskd",
+             "continuo.upstream.soularr", "continuo.upstream.musicbrainz", "continuo.workers.index",
+             "continuo.db.library", "continuo.music", "continuo.search", "continuo.fetch"}
+    assert not loaded & music, loaded & music

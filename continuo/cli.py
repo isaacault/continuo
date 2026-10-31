@@ -314,7 +314,7 @@ def cmd_backup(args) -> int:
 
 
 def cmd_policy_check(_args) -> int:
-    from .api.admin import policy_check
+    from .music.admin import policy_check
     from .upstream import http
 
     async def run():
