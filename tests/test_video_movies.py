@@ -127,3 +127,21 @@ def test_video_is_absent_without_the_part(client):
     make_user()
     s = login(client)
     assert client.get("/v1/video/search", params={"q": "x"}, headers=bearer(s)).status_code == 404
+
+
+def test_discover_marks_trending_and_popular_titles(vclient, fake):
+    from continuo.video import db, index
+    _jellyfin(fake, [{"Id": "jf-1", "Name": "The Matrix", "Type": "Movie", "ProviderIds": {"Tmdb": "603"}}])
+    run(index.refresh())
+    db.create(kind="series", tmdb_id=1396, title="Breaking Bad", year=2008, poster_path=None, user_id=None)
+    fake.on("GET", f"{TMDB}/trending/all/week", {"results": [
+        {"id": 603, "media_type": "movie", "title": "The Matrix"}, {"id": 1396, "media_type": "tv", "name": "Breaking Bad"},
+        {"id": 31, "media_type": "person", "name": "Tom Hanks"}]})
+    fake.on("GET", f"{TMDB}/movie/popular", {"results": [{"id": 27205, "title": "Inception", "release_date": "2010-07-15"}]})
+    fake.on("GET", f"{TMDB}/tv/popular", handler=lambda r: httpx.Response(500))
+    make_user()
+    s = login(vclient)
+    d = vclient.get("/v1/video/discover", headers=bearer(s)).json()
+    assert [(h["tmdbId"], h["availability"]["state"]) for h in d["trending"]] == [(603, "in_library"), (1396, "requested")]
+    assert d["popularFilms"][0]["kind"] == "movie" and d["popularFilms"][0]["year"] == 2010
+    assert d["popularSeries"] == [] and d["catalog"] == "ok", "one shelf failing leaves it empty"

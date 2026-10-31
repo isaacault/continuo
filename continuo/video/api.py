@@ -62,6 +62,25 @@ async def search(q: str = Query(..., min_length=1, max_length=200), _user: Curre
     return {"query": q, "sources": {"catalog": catalog, "library": "ok"}, "results": hits + library[:20]}
 
 
+@router.get("/discover")
+async def discover(_user: CurrentUser = Depends(require_user)) -> dict:
+    """Explore: TMDB's trending this week and what's popular, each marked with what's in the library
+    and what's requested (cached a day with the rest of TMDB's answers). A shelf TMDB can't give is
+    empty; without a TMDB key, all are."""
+    shelves = {"trending": [], "popularFilms": [], "popularSeries": []}
+    if not tmdb.configured():
+        return {**shelves, "catalog": "not_configured"}
+    calls = {"trending": tmdb.trending(), "popularFilms": tmdb.popular("movie"), "popularSeries": tmdb.popular("series")}
+    results = await asyncio.gather(*calls.values(), return_exceptions=True)
+    failed = False
+    for name, result in zip(calls, results, strict=True):
+        if isinstance(result, BaseException):
+            failed = True
+        else:
+            shelves[name] = [_hit(h) for h in result[:20]]
+    return {**shelves, "catalog": "unavailable" if failed and not any(shelves.values()) else "ok"}
+
+
 @router.get("/movies/{tmdb_id}")
 async def movie(tmdb_id: int, _user: CurrentUser = Depends(require_user)) -> dict:
     if not tmdb.configured():
