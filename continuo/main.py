@@ -74,6 +74,13 @@ def create_app(*, disable_workers: bool = False) -> FastAPI:
                   openapi_url="/openapi.json" if docs else None)
     app.state.disable_workers = disable_workers
     errors.install(app)
+    if config.settings.cors_allow_origins:
+        from fastapi.middleware.cors import CORSMiddleware
+        # Bearer tokens only, never cookies: credentials stay off, so "*" can't be abused to read
+        # anything a browser would send on its own.
+        app.add_middleware(CORSMiddleware, allow_origins=list(config.settings.cors_allow_origins),
+                           allow_credentials=False, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+                           allow_headers=["Authorization", "Content-Type"], max_age=600)
 
     @app.middleware("http")
     async def _headers(request, call_next):

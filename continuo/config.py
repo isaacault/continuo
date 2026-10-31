@@ -49,6 +49,10 @@ class Settings:
     trust_proxy: bool = True
     # /docs, /redoc and /openapi.json: off unless asked for (continuo is reachable from the internet).
     api_docs: bool = False
+    # Origins a browser app may call the API from (the video web app on the TV and in browsers), comma
+    # separated; "*" for any. Off by default: Polyphony's apps are native and need none. Safe with
+    # "*": continuo authenticates with bearer tokens, never cookies, so no credentials are allowed.
+    cors_allow_origins: tuple[str, ...] = ()
     # Which parts run (docs/design/video.md §3): core always; "music" (and later "video") when listed.
     modules: tuple[str, ...] = ("music",)
 
@@ -249,6 +253,7 @@ def load(env: dict | None = None) -> Settings:
         deep_link_template=_str(e, "DEEP_LINK_TEMPLATE", "polyphony://album/{server}/{albumId}"),
         trust_proxy=_bool(e, "TRUST_PROXY", True),
         api_docs=_bool(e, "API_DOCS", False),
+        cors_allow_origins=tuple(o.strip() for o in _str(e, "CORS_ALLOW_ORIGINS").split(",") if o.strip()),
         # Unset: music, as before parts existed. Set but empty: core alone.
         modules=tuple(m.strip() for m in (e.get("CONTINUO_MODULES") if e.get("CONTINUO_MODULES") is not None else "music").split(",")
                       if m.strip()),
