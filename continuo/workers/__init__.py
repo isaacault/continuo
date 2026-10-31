@@ -2,31 +2,20 @@
 import asyncio
 
 from .. import config
-from ..library import completeness, links
-from ..requests import tracks
-from . import heartbeat, reconcile, registry, scan, status
+from . import heartbeat, registry
 
 
-async def _warm_discover() -> None:
-    from ..search import discover
-    await discover.warm()
+def loop_specs(parts: list) -> dict:
+    """core's loops, then each enabled part's. Intervals are read each iteration, so a
+    config.reload() (tests) takes effect."""
+    loops = {"heartbeat": (lambda: config.settings.heartbeat_seconds, heartbeat.beat)}
+    for part in parts:
+        loops.update(part.loops())
+    return loops
 
 
-def start() -> list[asyncio.Task]:
-    # Intervals are read each iteration, so a config.reload() (tests) takes effect.
-    loops = {
-        "status": (lambda: config.settings.status_poll_seconds, status.tick),
-        "reconcile": (lambda: config.settings.reconcile_poll_seconds, reconcile.tick),
-        "scan": (lambda: config.settings.scan_poll_seconds, scan.tick),
-        "heartbeat": (lambda: config.settings.heartbeat_seconds, heartbeat.beat),
-        "nightly": (lambda: 600, heartbeat.nightly),
-        "libraries": (lambda: config.settings.library_sync_seconds, links.tick),
-        "tracks": (lambda: config.settings.track_poll_seconds, tracks.tick),
-        # Discovery pages built ahead (Explore, Home): checked every 20 min, rebuilt when 2.5 h old.
-        "discover": (lambda: 1200, _warm_discover),
-        # Which library albums are complete (GET /v1/library/partial): a few counted every 5 min.
-        "completeness": (lambda: 300, completeness.tick),
-    }
+def start(parts: list) -> list[asyncio.Task]:
+    loops = loop_specs(parts)
     tasks = []
     for name, (interval, body) in loops.items():
         task = asyncio.get_running_loop().create_task(

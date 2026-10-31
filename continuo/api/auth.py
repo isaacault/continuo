@@ -40,9 +40,13 @@ def library_credential(user: dict, device: dict) -> dict:
 
 def _session(user: dict, device: dict, refresh: str) -> dict:
     access, ttl = tokens.issue_access(user, device["id"])
-    return {"accessToken": access, "expiresIn": ttl, "refreshToken": refresh,
-            "user": _user_out(user), "device": {"id": device["id"], "name": device["name"]},
-            "library": library_credential(user, device)}
+    out = {"accessToken": access, "expiresIn": ttl, "refreshToken": refresh,
+           "user": _user_out(user), "device": {"id": device["id"], "name": device["name"]}}
+    # Each part adds what its clients need (music: the Subsonic credential as "library").
+    from .. import modules
+    for part in modules.load():
+        out.update(part.sign_in(user, device))
+    return out
 
 
 @router.post("/auth/login")
@@ -109,6 +113,9 @@ def capabilities(user: CurrentUser) -> list[str]:
 @router.get("/me/library")
 async def my_library(user: CurrentUser = Depends(require_user)) -> dict:
     """This device's Subsonic credential again (e.g. to re-add the server in the app)."""
+    from .. import modules
+    if not modules.is_on("music"):
+        raise ApiError(404, "not_found", "This server doesn't run music.")
     return library_credential(users_db.get_by_id(user.id), devices_db.get(user.device_id))
 
 
