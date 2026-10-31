@@ -31,7 +31,7 @@ def test_the_background_count_fills_what_isnt_counted_and_skips_singles(client):
     lib_db.upsert_many(ALBUMS)
     track_counts.put("rg-full", 10)
     assert completeness.uncounted(lib_db.all_albums(), track_counts.all_counts()) == ["rg-half", "rg-new"]
-    fake = AsyncMock(side_effect=lambda rg, strict=False: [{"title": str(i)} for i in range(12 if rg == "rg-half" else 3)])
+    fake = AsyncMock(side_effect=lambda rg, strict=False, standard=False: [{"title": str(i)} for i in range(12 if rg == "rg-half" else 3)])
     with patch("continuo.upstream.musicbrainz.album_tracks", fake):
         run(completeness.tick())
     assert track_counts.all_counts() == {"rg-full": 10, "rg-half": 12, "rg-new": 3}
@@ -82,3 +82,26 @@ def test_matching_by_name_wants_a_sure_score_and_the_same_artist(client):
     with patch("continuo.upstream.musicbrainz._get", AsyncMock(return_value={"releases": [
             {"score": 80, "release-group": {"id": "rg-meh"}, "artist-credit": [{"name": "Boards of Canada"}]}]})):
         assert run(musicbrainz.release_group_by_names("Boards of Canada", "Geogaddi")) is None
+
+
+def _release(id, n, date, status="Official"):
+    return {"id": id, "status": status, "date": date,
+            "media": [{"position": 1, "tracks": [{"position": i + 1, "title": f"{id}-{i}", "recording": {"id": f"r{i}"}} for i in range(n)]}]}
+
+
+def test_the_standard_edition_is_the_official_release_with_fewest_songs():
+    from continuo.upstream import musicbrainz
+    # Parachutes: the deluxe edition (11) came out first; the standard one has 10; a 3-song promo doesn't count.
+    releases = [_release("deluxe", 11, "2000-07-10"), _release("standard", 10, "2000-07-12"),
+                _release("promo", 3, "2000-06-01"), _release("bootleg", 9, "1999-01-01", status="Bootleg")]
+    assert musicbrainz._pick_standard(releases) == "standard"
+    assert musicbrainz._pick_release(releases) == "promo", "the catalogue's pick is unchanged (earliest official)"
+    assert musicbrainz._pick_standard([_release("x", 0, "2000")]) is None
+
+
+def test_album_tracks_standard_reads_the_standard_edition(client):
+    from continuo.upstream import musicbrainz
+    browse = {"releases": [_release("deluxe", 11, "2000-07-10"), _release("standard", 10, "2000-07-12")]}
+    with patch("continuo.upstream.musicbrainz._get", AsyncMock(return_value=browse)):
+        assert len(run(musicbrainz.album_tracks("rg-parachutes", standard=True))) == 10
+        assert len(run(musicbrainz.album_tracks("rg-parachutes"))) == 11, "the catalogue's tracklist: as before"
