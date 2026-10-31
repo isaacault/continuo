@@ -1,32 +1,16 @@
 """continuo — the server beneath Polyphony."""
-import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import __version__, config, errors, ratelimit, workers
-from .api import (
-    admin,
-    artwork,
-    auth,
-    health,
-    internal,
-    library,
-    notifications,
-    playnow,
-    requests,
-    scrobbling,
-    search,
-    subsonic,
-)
+from . import __version__, config, errors, modules, ratelimit, workers
+from .api import admin, artwork, auth, health, notifications
 from .auth import passwords
 from .db import migrate
 from .db import users as users_db
-from .requests import orchestrate
 from .upstream import http
-from .workers import heartbeat, index
 
 log = logging.getLogger("continuo")
 
@@ -61,34 +45,19 @@ def seed_admin() -> None:
     log.info("created first admin %r", s.admin_user)
 
 
-async def _startup_checks() -> None:
-    try:
-        await index.refresh()
-    except Exception as e:  # noqa: BLE001 — Navidrome may still be starting
-        log.warning("initial library index failed: %s", e)
-    try:
-        report = await admin.policy_check()
-        for c in report["checks"]:
-            if c["status"] != "ok":
-                log.warning("policy check %s: %s — %s", c["name"], c["status"], c["message"])
-    except Exception:  # noqa: BLE001
-        log.exception("startup policy check failed")
-    heartbeat.mark_nightly_done()   # this was today's index + policy check; don't repeat it
-
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     migrate.run()
     seed_admin()
     ratelimit.configure()
     tasks = []
+    parts = modules.load()
     if not getattr(_app.state, "disable_workers", False):
-        orchestrate.requeue_stranded()
-        tasks = workers.start()
-        from .requests import playnow
-        playnow.requeue_interrupted()
-        tasks.append(asyncio.get_running_loop().create_task(_startup_checks()))
-    log.info("continuo %s up (navidrome auth: %s)", __version__, config.settings.navidrome_auth)
+        tasks = workers.start(parts)
+        for part in parts:
+            tasks += part.on_start()
+    log.info("continuo %s up (parts: core%s; navidrome auth: %s)", __version__,
+             "".join(f", {m}" for m in modules.enabled()), config.settings.navidrome_auth)
     try:
         yield
     finally:
@@ -114,9 +83,11 @@ def create_app(*, disable_workers: bool = False) -> FastAPI:
         response.headers.setdefault("Cache-Control", "no-store")
         return response
 
-    for r in (health.router, auth.router, search.router, requests.router,
-              notifications.router, admin.router, internal.router, artwork.router, library.router,
-              playnow.router, scrobbling.router, subsonic.router):
+    # core's routes, then each enabled part's (a part that's off isn't even imported).
+    routers = [health.router, auth.router, notifications.router, admin.router, artwork.router]
+    for part in modules.load():
+        routers += part.routers()
+    for r in routers:
         app.include_router(r)
     return app
 

@@ -49,6 +49,8 @@ class Settings:
     trust_proxy: bool = True
     # /docs, /redoc and /openapi.json: off unless asked for (continuo is reachable from the internet).
     api_docs: bool = False
+    # Which parts run (docs/design/video.md §3): core always; "music" (and later "video") when listed.
+    modules: tuple[str, ...] = ("music",)
 
     # --- auth ---
     jwt_secret: str = ""
@@ -227,6 +229,9 @@ def load(env: dict | None = None) -> Settings:
         deep_link_template=_str(e, "DEEP_LINK_TEMPLATE", "polyphony://album/{server}/{albumId}"),
         trust_proxy=_bool(e, "TRUST_PROXY", True),
         api_docs=_bool(e, "API_DOCS", False),
+        # Unset: music, as before parts existed. Set but empty: core alone.
+        modules=tuple(m.strip() for m in (e.get("CONTINUO_MODULES") if e.get("CONTINUO_MODULES") is not None else "music").split(",")
+                      if m.strip()),
         jwt_secret=_resolve_jwt_secret(e, db_path),
         access_token_ttl=_int(e, "ACCESS_TOKEN_TTL", 3600),
         refresh_token_ttl_days=_int(e, "REFRESH_TOKEN_TTL_DAYS", 90),
