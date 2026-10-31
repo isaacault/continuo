@@ -334,3 +334,44 @@ def test_the_priority_route(client, world):
     streams_db.create("p0", isaac["id"], "rec-p0", RG, "P0", "A", None, status="queued")
     out = client.post("/v1/play-now/priority", headers=bearer(login(client)), json={"ids": ["p0"]})
     assert out.status_code == 200 and out.json()["updated"] == 1
+
+
+def test_a_receiver_link_plays_without_a_token_and_dies_with_the_device(client, world, monkeypatch):
+    """A speaker (the Yamaha) can't send a bearer token: it gets a signed link, on the LAN door."""
+    import dataclasses
+    from urllib.parse import parse_qs, urlparse
+
+    from continuo import config
+    monkeypatch.setattr(config, "settings", dataclasses.replace(config.settings, receiver_base_url="http://192.168.0.101"))
+    isaac = make_user()
+
+    def done(c):
+        _finished(world, _downloading(world))
+        return {"state": "Completed, Succeeded", "id": "t1"}
+    world["state"]["transfer"]["alice"] = done
+    row = _run(isaac["id"])
+    s = login(client)
+    link = client.get(f"/v1/play-now/{row['id']}/receiver", headers=bearer(s)).json()
+    url = urlparse(link["url"])
+    assert f"{url.scheme}://{url.netloc}" == "http://192.168.0.101" and url.path == f"/v1/play-now/{row['id']}/audio"
+    path = f"{url.path}?{url.query}"
+    full = client.get(path)
+    assert full.status_code == 200 and full.content == AUDIO
+    assert client.get(path, headers={"Range": "bytes=0-9"}).content == AUDIO[:10]
+    q = parse_qs(url.query)
+    forged = f"{url.path}?d={q['d'][0]}&exp={q['exp'][0]}&sig={'0' * 64}"
+    assert client.get(forged).status_code == 401
+    other = f"/v1/play-now/someone-else/audio?{url.query}"
+    assert client.get(other).status_code == 401, "signed for this stream only"
+    client.post("/v1/auth/logout", headers=bearer(s))
+    assert client.get(path).status_code == 401, "signed out: the link is dead"
+
+
+def test_an_expired_receiver_link_is_refused(client, world):
+    from continuo.api import playnow as api
+    isaac = make_user()
+    row = streams_db.create("sid-old", isaac["id"], REC, RG, "Old", "A", None)
+    s = login(client)
+    device = s["device"]["id"]
+    sig = api._signature(row["id"], device, 1000)
+    assert client.get(f"/v1/play-now/{row['id']}/audio?d={device}&exp=1000&sig={sig}").status_code == 401

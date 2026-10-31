@@ -1,14 +1,21 @@
 """Play now (#12): start a stream, follow it, play its audio while it downloads, keep it."""
 import asyncio
+import hashlib
+import hmac
 import os
 import re
+import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
+from .. import config
+from ..auth import deps
 from ..auth.deps import CurrentUser, require_user
+from ..db import devices as devices_db
 from ..db import streams as streams_db
 from ..db import users as users_db
 from ..errors import ApiError
@@ -93,8 +100,58 @@ async def scrobble(stream_id: str, body: ScrobbleIn, user: CurrentUser = Depends
     return {"sent": await playnow.scrobble(user.id, row, body.listenedAt)}
 
 
+# A receiver (DLNA, Cast) fetches the audio itself and can't send a bearer token: it's given a link
+# signed for this stream and this device, good for RECEIVER_LINK_SECONDS, dead once the device is
+# signed out (GET /{id}/receiver).
+RECEIVER_LINK_SECONDS = 12 * 3600
+
+
+def _signature(stream_id: str, device_id: str, expires: int) -> str:
+    msg = f"play-now-audio|{stream_id}|{device_id}|{expires}".encode()
+    return hmac.new(config.settings.jwt_secret.encode(), msg, hashlib.sha256).hexdigest()
+
+
+def _signed_user(stream_id: str, device_id: str | None, expires: int | None, sig: str | None) -> CurrentUser | None:
+    if not (device_id and expires and sig) or expires < time.time():
+        return None
+    if not hmac.compare_digest(sig, _signature(stream_id, device_id, expires)):
+        return None
+    device = devices_db.get(device_id)
+    if not device or device["revoked_at"]:
+        return None
+    user = users_db.get_by_id(device["user_id"])
+    if not user:
+        return None
+    return CurrentUser(user["id"], user["username"], user["role"],
+                       user.get("navidrome_username") or user["username"], device_id)
+
+
+async def _audio_user(stream_id: str, request: Request,
+                      creds: HTTPAuthorizationCredentials | None = Depends(deps._bearer),
+                      d: str | None = Query(None), exp: int | None = Query(None),
+                      sig: str | None = Query(None)) -> CurrentUser:
+    """The bearer token's user, or a receiver link's (its device's user)."""
+    if creds is not None:
+        return deps.require_user(request, creds)
+    user = _signed_user(stream_id, d, exp, sig)
+    if user is None:
+        raise ApiError(401, "missing_token", "Missing or expired token.")
+    return user
+
+
+@router.get("/{stream_id}/receiver")
+async def receiver_link(stream_id: str, user: CurrentUser = Depends(require_user)) -> dict:
+    """A link a speaker can play without a token: on RECEIVER_BASE_URL (the plain-HTTP LAN door)
+    when set, else continuo's public address; signed for this device, good for 12 hours."""
+    _mine(stream_id, user)
+    expires = int(time.time()) + RECEIVER_LINK_SECONDS
+    base = config.settings.receiver_base_url or config.settings.public_base_url
+    query = f"d={user.device_id}&exp={expires}&sig={_signature(stream_id, user.device_id, expires)}"
+    return {"url": f"{base}/v1/play-now/{stream_id}/audio?{query}", "expiresAt": expires}
+
+
 @router.get("/{stream_id}/audio")
-async def audio(stream_id: str, request: Request, user: CurrentUser = Depends(require_user)):
+async def audio(stream_id: str, request: Request, user: CurrentUser = Depends(_audio_user)):
     """The song's audio, served while it downloads: the full length is announced (the copy's size
     on Soulseek), and a read past what's on disk waits for the download (up to 30 s without a new
     byte). Range requests work, so the player can seek."""
