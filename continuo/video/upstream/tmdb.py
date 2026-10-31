@@ -95,3 +95,7 @@ async def movie(tmdb_id: int) -> dict:
 
 async def series(tmdb_id: int) -> dict:
     return await _get(f"/tv/{tmdb_id}", {"append_to_response": "external_ids"})
+
+
+async def season(tmdb_id: int, number: int) -> dict:
+    return await _get(f"/tv/{tmdb_id}/season/{number}")

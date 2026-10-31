@@ -1,6 +1,7 @@
 """The video part's API (docs/design/video.md §7): search, film pages, film requests. Under
 /v1/video; the TV/web/phone clients use it with the same continuo sign-in as music's apps."""
 import asyncio
+import json
 
 import httpx
 from fastapi import APIRouter, Depends, Query
@@ -79,15 +80,91 @@ async def movie(tmdb_id: int, _user: CurrentUser = Depends(require_user)) -> dic
             "trailerYouTubeKey": trailer, "availability": availability("movie", tmdb_id)}
 
 
+async def _jellyfin_user(user: CurrentUser) -> str | None:
+    from . import accounts
+    acct = accounts.account(user.id)
+    return acct["jellyfin_user_id"] if acct else None
+
+
+@router.get("/series/{tmdb_id}")
+async def series_page(tmdb_id: int, user: CurrentUser = Depends(require_user)) -> dict:
+    """A series and its seasons, each with the episodes the library has against TMDB's count: a
+    season with fewer is partial (specials, season 0, are listed but never counted)."""
+    show = await _tmdb(tmdb.series(tmdb_id))
+    item = index.by_tmdb("series", tmdb_id)
+    have: dict[int, int] = {}
+    if item:
+        from .upstream import jellyfin
+        try:
+            for e in await jellyfin.episodes(item["jellyfin_id"]):
+                if e["season"] is not None:
+                    have[e["season"]] = have.get(e["season"], 0) + 1
+        except httpx.HTTPError:
+            pass
+    seasons = []
+    for x in show.get("seasons") or []:
+        n, expected = x.get("season_number"), x.get("episode_count") or 0
+        got = have.get(n, 0)
+        state = "in_library" if expected and got >= expected else "partial" if got else "missing"
+        seasons.append({"number": n, "name": x.get("name"), "episodes": expected, "have": got,
+                        "airDate": x.get("air_date"), "poster": _image(x.get("poster_path")), "state": state})
+    return {"kind": "series", "tmdbId": tmdb_id, "title": show.get("name") or "",
+            "year": int(show["first_air_date"][:4]) if (show.get("first_air_date") or "")[:4].isdigit() else None,
+            "overview": show.get("overview") or None, "status": show.get("status"),
+            "genres": [g["name"] for g in show.get("genres") or [] if g.get("name")],
+            "poster": _image(show.get("poster_path")), "backdrop": _image(show.get("backdrop_path"), "w1280"),
+            "seasons": seasons, "availability": availability("series", tmdb_id)}
+
+
+@router.get("/series/{tmdb_id}/seasons/{number}")
+async def season_page(tmdb_id: int, number: int, user: CurrentUser = Depends(require_user)) -> dict:
+    """A season's episodes: in the library or not, each with its Jellyfin ID and (for a linked or
+    created Jellyfin user) whether it's watched and where it was left."""
+    season = await _tmdb(tmdb.season(tmdb_id, number))
+    item = index.by_tmdb("series", tmdb_id)
+    mine: dict[int, dict] = {}
+    if item:
+        from .upstream import jellyfin
+        try:
+            for e in await jellyfin.episodes(item["jellyfin_id"], await _jellyfin_user(user), season=number):
+                if e["episode"] is not None:
+                    mine[e["episode"]] = e
+        except httpx.HTTPError:
+            pass
+    episodes = []
+    for e in season.get("episodes") or []:
+        n = e.get("episode_number")
+        got = mine.get(n)
+        episodes.append({"number": n, "title": e.get("name"), "overview": e.get("overview") or None,
+                         "airDate": e.get("air_date"), "runtimeMinutes": e.get("runtime"),
+                         "still": _image(e.get("still_path"), "w300"),
+                         "inLibrary": got is not None, "jellyfinId": got["jellyfinId"] if got else None,
+                         "played": got["played"] if got else False,
+                         "positionSeconds": got["positionSeconds"] if got else 0})
+    return {"tmdbId": tmdb_id, "number": number, "name": season.get("name"), "episodes": episodes}
+
+
+async def _tmdb(call):
+    if not tmdb.configured():
+        raise ApiError(503, "catalog_not_configured", "This server has no TMDB key.")
+    try:
+        return await call
+    except tmdb.Unavailable as e:
+        raise ApiError(503, "catalog_unavailable", "TMDB isn't answering right now.", True) from e
+
+
 class RequestIn(BaseModel):
     kind: str
     tmdbId: int
+    # A series: which seasons (none: every aired season but specials).
+    seasons: list[int] | None = None
 
 
 def _request_out(r: dict) -> dict:
     return {"id": r["id"], "kind": r["kind"], "tmdbId": r["tmdb_id"], "title": r["title"], "year": r["year"],
             "poster": _image(r.get("poster_path")), "status": r["status"], "error": r.get("error"),
-            "jellyfinId": r.get("jellyfin_id"), "createdAt": r["created_at"], "availableAt": r.get("available_at")}
+            "jellyfinId": r.get("jellyfin_id"), "createdAt": r["created_at"], "availableAt": r.get("available_at"),
+            "seasons": json.loads(r["seasons"]) if r.get("seasons") else None}
 
 
 @router.get("/requests")
@@ -97,22 +174,24 @@ async def list_requests(user: CurrentUser = Depends(require_user)) -> dict:
 
 @router.post("/requests", status_code=201)
 async def create_request(body: RequestIn, user: CurrentUser = Depends(require_user)) -> dict:
-    if body.kind != "movie":
-        raise ApiError(400, "unsupported_kind", "Only films can be requested so far; series are coming.")
-    if index.by_tmdb("movie", body.tmdbId):
+    if body.kind not in ("movie", "series"):
+        raise ApiError(400, "unsupported_kind", "Films (movie) and series can be requested.")
+    if body.kind == "movie" and index.by_tmdb("movie", body.tmdbId):
         raise ApiError(409, "in_library", "That film is already in the library.")
-    existing = db.active_for("movie", body.tmdbId)
+    existing = db.active_for(body.kind, body.tmdbId)
     if existing:
         return {"request": _request_out(existing), "created": False}
     title = year = poster = None
     if tmdb.configured():
         try:
-            m = await tmdb.movie(body.tmdbId)
-            title, poster = m.get("title"), m.get("poster_path")
-            year = int(m["release_date"][:4]) if (m.get("release_date") or "")[:4].isdigit() else None
+            m = await (tmdb.movie(body.tmdbId) if body.kind == "movie" else tmdb.series(body.tmdbId))
+            title, poster = m.get("title") or m.get("name"), m.get("poster_path")
+            date = m.get("release_date") or m.get("first_air_date") or ""
+            year = int(date[:4]) if date[:4].isdigit() else None
         except tmdb.Unavailable:
             pass
-    req = db.create(kind="movie", tmdb_id=body.tmdbId, title=title, year=year, poster_path=poster, user_id=user.id)
+    req = db.create(kind=body.kind, tmdb_id=body.tmdbId, title=title, year=year, poster_path=poster, user_id=user.id,
+                    seasons=sorted(set(body.seasons)) if body.kind == "series" and body.seasons else None)
     from . import requests as pipeline
     task = asyncio.get_running_loop().create_task(pipeline.start(req["id"]))
     _tasks.add(task)

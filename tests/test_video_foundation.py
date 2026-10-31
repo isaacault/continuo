@@ -41,7 +41,7 @@ def test_video_brings_its_loop_and_health_checks(fake):
     assert "video_index" in workers.loop_specs(modules.load())
     video = next(p for p in modules.load() if p.__name__ == "continuo.video")
     checks = video.health_checks()
-    assert set(checks) == {"jellyfin", "radarr", "tmdb"}
+    assert set(checks) == {"jellyfin", "radarr", "sonarr", "tmdb"}
     for c in checks.values():
         c.close()
 

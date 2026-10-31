@@ -23,8 +23,8 @@ def on_start() -> list[asyncio.Task]:
 
 
 def health_checks() -> dict:
-    from .upstream import jellyfin, radarr, tmdb
-    checks = {"jellyfin": jellyfin.ping(), "radarr": radarr.ping()}
+    from .upstream import jellyfin, radarr, sonarr, tmdb
+    checks = {"jellyfin": jellyfin.ping(), "radarr": radarr.ping(), "sonarr": sonarr.ping()}
     if tmdb.configured():
         checks["tmdb"] = tmdb.ping()
     return checks
