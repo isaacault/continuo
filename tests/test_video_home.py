@@ -34,8 +34,8 @@ def test_home_has_jellyfins_shelves_and_the_requests_on_their_way(vclient, fake)
          "ParentIndexNumber": 1, "IndexNumber": 1, "RunTimeTicks": 34_800_000_000, "UserData": {"PlaybackPositionTicks": 6_000_000_000}}]})
     fake.on("GET", f"{JELLYFIN}/Shows/NextUp", {"Items": [{"Id": "e2", "Type": "Episode", "Name": "Cat's in the Bag...",
                                                           "SeriesName": "Breaking Bad", "ParentIndexNumber": 1, "IndexNumber": 2}]})
-    fake.on("GET", f"{JELLYFIN}/Users/jf-u1/Items/Latest", [{"Id": "jf-1", "Type": "Movie", "Name": "The Matrix",
-                                                             "ProductionYear": 1999, "ProviderIds": {"Tmdb": "603"}}])
+    fake.on("GET", f"{JELLYFIN}/Items", {"Items": [{"Id": "jf-1", "Type": "Movie", "Name": "The Matrix",
+                                                    "ProductionYear": 1999, "ProviderIds": {"Tmdb": "603"}}]})
     make_user()
     _link()
     db.create(kind="movie", tmdb_id=604, title="The Matrix Reloaded", year=2003, poster_path=None, user_id=1)
@@ -47,6 +47,10 @@ def test_home_has_jellyfins_shelves_and_the_requests_on_their_way(vclient, fake)
     assert h["nextUp"][0]["episode"] == 2 and h["recentlyAdded"][0]["tmdbId"] == 603
     assert [r["title"] for r in h["requests"]] == ["The Matrix Reloaded"] and h["linked"] is True
     assert fake.called("GET", f"{JELLYFIN}/Shows/NextUp")[0].url.params["UserId"] == "jf-u1"
+    # Recently Added: films and series by date added (Jellyfin 12's "latest" answers nothing for them).
+    latest = fake.called("GET", f"{JELLYFIN}/Items")[0].url.params
+    assert (latest["userId"], latest["IncludeItemTypes"], latest["SortBy"], latest["SortOrder"]) == \
+        ("jf-u1", "Movie,Series", "DateCreated", "Descending")
 
 
 def test_home_without_a_jellyfin_user_or_with_jellyfin_down(vclient, fake):
@@ -57,5 +61,5 @@ def test_home_without_a_jellyfin_user_or_with_jellyfin_down(vclient, fake):
     _link()
     fake.on("GET", f"{JELLYFIN}/Users/jf-u1/Items/Resume", handler=lambda r: httpx.Response(500))
     fake.on("GET", f"{JELLYFIN}/Shows/NextUp", {"Items": []})
-    fake.on("GET", f"{JELLYFIN}/Users/jf-u1/Items/Latest", [])
+    fake.on("GET", f"{JELLYFIN}/Items", {"Items": []})
     assert vclient.get("/v1/video/home", headers=bearer(s)).json()["continueWatching"] == [], "a shelf that fails is empty"
