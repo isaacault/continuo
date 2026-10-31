@@ -61,7 +61,9 @@ def test_the_index_reads_jellyfin_and_stops_when_paging_is_ignored(fake):
     finally:
         jellyfin.PAGE = 200
     assert len(fake.called("GET", f"{JELLYFIN}/Items")) == 2, "the repeat page ended it"
-    assert fake.called("GET", f"{JELLYFIN}/Items")[0].headers["X-Emby-Token"] == "jf-key"
+    # Jellyfin 12 takes the key only in the Authorization header.
+    assert fake.called("GET", f"{JELLYFIN}/Items")[0].headers["Authorization"] == 'MediaBrowser Token="jf-key"'
+    assert "X-Emby-Token" not in fake.called("GET", f"{JELLYFIN}/Items")[0].headers
     assert index.by_tmdb("movie", 603)["jellyfin_id"] == "jf-1"
     assert index.by_tmdb("series", 1396)["tvdb_id"] == 81189
     fake.on("GET", f"{JELLYFIN}/Items", {"Items": items[:1]})

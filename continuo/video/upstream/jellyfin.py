@@ -10,13 +10,21 @@ PAGE = 200
 
 def _client() -> httpx.AsyncClient:
     s = config.settings
-    return http.client("jellyfin", base_url=s.jellyfin_url, headers={"X-Emby-Token": s.jellyfin_api_key},
+    return http.client("jellyfin", base_url=s.jellyfin_url, headers={"Authorization": api_key_auth(s.jellyfin_api_key)},
                        timeout=30.0)
 
 
+def api_key_auth(key: str) -> str:
+    """Jellyfin 12 takes a key only in the Authorization header (X-Emby-Token and ?api_key=
+    answer 401; the query form is ?ApiKey=)."""
+    return f'MediaBrowser Token="{key}"'
+
+
 async def ping() -> bool:
+    """True when Jellyfin answers *and* takes the API key (/System/Info/Public needs no key, so a
+    wrong one would pass)."""
     try:
-        r = await _client().get("/System/Info/Public", timeout=5.0)
+        r = await _client().get("/System/Info", timeout=5.0)
         return r.status_code == 200
     except httpx.HTTPError:
         return False
@@ -83,7 +91,7 @@ async def authenticate(username: str, password: str, device_id: str, device_name
     """A user token for this device: {"token", "userId"}. Raises httpx.HTTPStatusError (401) on a
     wrong password."""
     r = await _client().post("/Users/AuthenticateByName", json={"Username": username, "Pw": password},
-                             headers={"Authorization": _device_auth(device_id, device_name), "X-Emby-Token": ""})
+                             headers={"Authorization": _device_auth(device_id, device_name)})
     r.raise_for_status()
     body = r.json()
     return {"token": body["AccessToken"], "userId": (body.get("User") or {}).get("Id")}
