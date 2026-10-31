@@ -115,3 +115,42 @@ async def episodes(series_jellyfin_id: str, user_id: str | None = None, season: 
                     "title": e.get("Name"), "played": bool(data.get("Played")),
                     "positionSeconds": int((data.get("PlaybackPositionTicks") or 0) / 10_000_000)})
     return out
+
+
+# --- home: continue watching, next up, recently added (per Jellyfin user) ----------------------
+
+def summarize(item: dict) -> dict:
+    """An item as the video home lists it; clients load its picture from Jellyfin
+    (/Items/{jellyfinId}/Images/Primary) with their own token."""
+    data = item.get("UserData") or {}
+    ticks = item.get("RunTimeTicks") or 0
+    kind = {"Movie": "movie", "Episode": "episode", "Series": "series"}.get(item.get("Type") or "", "other")
+    ids = {k.lower(): v for k, v in (item.get("ProviderIds") or {}).items()}
+    return {"jellyfinId": item.get("Id"), "kind": kind, "title": item.get("Name") or "",
+            "seriesTitle": item.get("SeriesName"), "seriesJellyfinId": item.get("SeriesId"),
+            "season": item.get("ParentIndexNumber"), "episode": item.get("IndexNumber"),
+            "year": item.get("ProductionYear"), "tmdbId": _int(ids.get("tmdb")),
+            "runtimeSeconds": int(ticks / 10_000_000) if ticks else None,
+            "positionSeconds": int((data.get("PlaybackPositionTicks") or 0) / 10_000_000),
+            "played": bool(data.get("Played"))}
+
+
+async def resume(user_id: str, limit: int = 12) -> list[dict]:
+    r = await _client().get(f"/Users/{user_id}/Items/Resume", params={
+        "Limit": limit, "MediaTypes": "Video", "Fields": "ProviderIds"})
+    r.raise_for_status()
+    return [summarize(i) for i in r.json().get("Items") or []]
+
+
+async def next_up(user_id: str, limit: int = 12) -> list[dict]:
+    r = await _client().get("/Shows/NextUp", params={"UserId": user_id, "Limit": limit, "Fields": "ProviderIds"})
+    r.raise_for_status()
+    return [summarize(i) for i in r.json().get("Items") or []]
+
+
+async def latest(user_id: str, limit: int = 16) -> list[dict]:
+    r = await _client().get(f"/Users/{user_id}/Items/Latest", params={
+        "Limit": limit, "IncludeItemTypes": "Movie,Series", "Fields": "ProviderIds"})
+    r.raise_for_status()
+    body = r.json()
+    return [summarize(i) for i in (body if isinstance(body, list) else body.get("Items") or [])]
