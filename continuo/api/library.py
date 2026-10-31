@@ -51,7 +51,8 @@ async def album_tracklist(request: Request, navidrome_id: str, user: CurrentUser
     rg = (album or {}).get("mbz_release_group_id")
     if not rg:
         raise ApiError(404, "not_found", "No catalogue album is known for that library album.")
-    return {"musicBrainzReleaseGroupId": rg, "tracks": await musicbrainz.album_tracks(rg)}
+    # Measured against the standard edition: a deluxe edition's bonus tracks aren't "missing".
+    return {"musicBrainzReleaseGroupId": rg, "tracks": await musicbrainz.album_tracks(rg, standard=True)}
 
 
 @router.get("/partial")

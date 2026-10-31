@@ -57,7 +57,7 @@ async def tick() -> None:
     todo = uncounted(_with_matches(lib_db.all_albums()), track_counts.all_counts())[:BATCH]
     for rg in todo:
         try:
-            tracks = await musicbrainz.album_tracks(rg, strict=True)
+            tracks = await musicbrainz.album_tracks(rg, strict=True, standard=True)
         except musicbrainz.Unavailable:
             return          # MusicBrainz busy or down: next tick
         track_counts.put(rg, len(tracks))

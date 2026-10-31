@@ -191,6 +191,22 @@ def searched_recording(recording_mbid: str) -> Optional[dict]:
     return None
 
 
+def _track_count(rel: dict) -> int:
+    return sum(len(m.get("tracks") or []) for m in rel.get("media") or [])
+
+
+def _pick_standard(releases: list[dict]) -> Optional[str]:
+    """The group's standard edition: the official release with the fewest songs (a deluxe edition's
+    bonus tracks don't make the library's album partial), leaving out any under half the largest
+    (a promo, a sampler); the earliest of equals. None without official releases with tracks."""
+    official = [r for r in releases if r.get("status") == "Official" and _track_count(r) > 0]
+    if not official:
+        return None
+    most = max(_track_count(r) for r in official)
+    full = [r for r in official if _track_count(r) * 2 >= most]
+    return min(full, key=lambda r: (_track_count(r), r.get("date") or "9999")).get("id")
+
+
 def _pick_release(releases: list[dict]) -> Optional[str]:
     if not releases:
         return None
@@ -199,7 +215,7 @@ def _pick_release(releases: list[dict]) -> Optional[str]:
 
 
 async def album_tracks(release_group_mbid: str, release_mbid: Optional[str] = None,
-                       strict: bool = False) -> list[dict]:
+                       strict: bool = False, standard: bool = False) -> list[dict]:
     """Tracklist of one canonical official release of the group (or the given release).
     A release's tracklist never changes, so it's cached for the process life (bounded).
     [] when MusicBrainz fails, or with [strict] raises Unavailable.
@@ -207,8 +223,11 @@ async def album_tracks(release_group_mbid: str, release_mbid: Optional[str] = No
     For a group, one call: the group's official releases with their tracks (a browse), the
     canonical one picked from them; MusicBrainz is paced to a call a second, so the two-step
     group-then-release lookup cost an album page a second. Without official releases, the
-    two-step one is the fallback."""
-    cache_key = release_mbid or release_group_mbid
+    two-step one is the fallback.
+
+    [standard]: the standard edition's instead (see _pick_standard): what a library album is
+    measured against, for whether it's complete and what's missing from it."""
+    cache_key = release_mbid or (release_group_mbid + (":standard" if standard else ""))
     if cache_key in _tracklist_cache:
         return _tracklist_cache[cache_key]
     try:
@@ -217,7 +236,7 @@ async def album_tracks(release_group_mbid: str, release_mbid: Optional[str] = No
             browse = await _get("/release", {"release-group": release_group_mbid, "inc": "recordings",
                                              "status": "official", "limit": 25})
             releases = browse.get("releases") or []
-            pick = _pick_release(releases)
+            pick = (_pick_standard(releases) if standard else None) or _pick_release(releases)
             rel = next((r for r in releases if r.get("id") == pick), None)
             if rel is None:
                 rg = await _get(f"/release-group/{release_group_mbid}", {"inc": "releases"})

@@ -17,7 +17,8 @@ def test_a_single_in_the_library_brings_its_whole_album(client, monkeypatch):
     _album("nd-cy", "rg-cy")
     asked = []
 
-    async def tracks(rg, release_mbid=None, strict=False):
+    async def tracks(rg, release_mbid=None, strict=False, standard=False):
+        assert standard, "a library album is measured against the standard edition"
         asked.append(rg)
         return [{"position": 1, "title": "Visit Croatia", "durationMs": 1, "discNumber": 1, "musicBrainzRecordingId": "r1"},
                 {"position": 2, "title": "Song of Gratitude", "durationMs": 1, "discNumber": 1, "musicBrainzRecordingId": "r2"}]
