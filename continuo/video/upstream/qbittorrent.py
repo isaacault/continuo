@@ -108,3 +108,28 @@ async def stream_mode(hash_: str, t: dict) -> None:
             if not (after.get("seq_dl") and after.get("f_l_piece_prio")):
                 log.warning("play now: %s didn't stay on (in order=%s, first/last first=%s)", hash_.lower()[:12],
                             after.get("seq_dl"), after.get("f_l_piece_prio"))
+
+
+# --- Play now's priority: the latest at full speed, the others slowly on --------------------------
+
+DEMOTED_LIMIT = 512 * 1024          # bytes/s for an older Play now while a newer one downloads
+
+
+async def promote(hash_: str, t: dict) -> None:
+    """The Play now being watched: in order, no speed limit, top of the queue."""
+    await stream_mode(hash_, t)
+    if (t.get("dl_limit") or 0) > 0:
+        await _call("POST", "/torrents/setDownloadLimit", data={"hashes": hash_.lower(), "limit": 0})
+    await _call("POST", "/torrents/topPrio", data={"hashes": hash_.lower()})
+
+
+async def demote(hash_: str, t: dict) -> None:
+    """An older Play now: back to an ordinary download (out of order), slowed, so the latest gets
+    the bandwidth. It carries on into the library."""
+    tag = config.settings.qbittorrent_play_now_tag
+    if tag and tag in [x.strip() for x in (t.get("tags") or "").split(",")]:
+        await _call("POST", "/torrents/removeTags", data={"hashes": hash_.lower(), "tags": tag})
+    elif not tag and t.get("seq_dl"):
+        await _call("POST", "/torrents/toggleSequentialDownload", data={"hashes": hash_.lower()})
+    if (t.get("dl_limit") or 0) != DEMOTED_LIMIT:
+        await _call("POST", "/torrents/setDownloadLimit", data={"hashes": hash_.lower(), "limit": DEMOTED_LIMIT})

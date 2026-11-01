@@ -74,3 +74,20 @@ async def drop_download(queue_id: int) -> None:
     r = await _client().delete(f"/queue/{queue_id}", params={"removeFromClient": "true", "blocklist": "true",
                                                               "skipRedownload": "true"})
     r.raise_for_status()
+
+
+async def remove_download(queue_id: int) -> None:
+    """Stops a download and deletes what it had (from qBittorrent too); its release isn't blocklisted."""
+    r = await _client().delete(f"/queue/{queue_id}", params={"removeFromClient": "true", "blocklist": "false"})
+    r.raise_for_status()
+
+
+async def movie(movie_id: int) -> dict:
+    r = await _client().get(f"/movie/{movie_id}")
+    r.raise_for_status()
+    return r.json()
+
+
+async def delete_movie(movie_id: int) -> None:
+    r = await _client().delete(f"/movie/{movie_id}", params={"deleteFiles": "true", "addImportExclusion": "false"})
+    r.raise_for_status()

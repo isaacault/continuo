@@ -94,3 +94,16 @@ def seasons_complete(series: dict, asked: list[int] | None) -> bool:
         if st.get("episodeCount", 0) and st.get("episodeFileCount", 0) < st.get("episodeCount", 0):
             return False
     return True
+
+
+async def remove_download(queue_id: int) -> None:
+    r = await _client().delete(f"/queue/{queue_id}", params={"removeFromClient": "true", "blocklist": "false"})
+    r.raise_for_status()
+
+
+async def unmonitor_season(series_id: int, season: int) -> None:
+    """Stops Sonarr wanting a season (so a stopped download isn't fetched again)."""
+    show = await series(series_id)
+    show["seasons"] = [{**x, "monitored": False} if x.get("seasonNumber") == season else x for x in show.get("seasons") or []]
+    r = await _client().put(f"/series/{series_id}", json=show)
+    r.raise_for_status()

@@ -12,10 +12,12 @@ def routers() -> list:
 
 def loops() -> dict[str, tuple[Callable[[], float], Callable]]:
     from .. import config
-    from . import index, requests
+    from . import index, playnow, requests
     return {"video_index": (lambda: config.settings.video_index_seconds, index.refresh),
             # Film requests through Radarr to Jellyfin: checked every minute.
-            "video_requests": (lambda: 60, requests.tick)}
+            "video_requests": (lambda: 60, requests.tick),
+            # Play now's priority: the latest one at full speed, re-checked every 20 s.
+            "video_play_now": (lambda: 20, playnow.rebalance)}
 
 
 def on_start() -> list[asyncio.Task]:
