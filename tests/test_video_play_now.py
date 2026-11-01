@@ -255,3 +255,78 @@ def test_the_stream_remembers_where_the_file_is(vclient, fake, monkeypatch):
         assert vclient.get(url, headers={"Range": f"bytes={n * PIECE}-{n * PIECE + 99}"}).status_code == 206
     assert len(fake.called("GET", f"{RADARR}/queue/details")) - before == 1, "the queue asked once, not for every chunk"
     assert len(fake.called("GET", f"{QBT}/torrents/pieceStates")) >= 4, "what has arrived is still checked every time"
+
+
+def _rel(title, seeds, gb, quality="Bluray-1080p", resolution=1080, rejections=(), guid=None):
+    return {"title": title, "seeders": seeds, "size": int(gb * 1e9), "protocol": "torrent", "guid": guid or title, "indexerId": 3,
+            "quality": {"quality": {"name": quality, "resolution": resolution}}, "rejections": list(rejections)}
+
+
+# Shaped like the homelab's real search for The Shawshank Redemption (1 Nov 2026).
+SHAWSHANK = [
+    _rel("The Shawshank Redemption 1994 REPACK UHD BluRay 1080p DDP 5 1 DoVi HDR10 x265-SM737", 2, 8.5),
+    _rel("The Shawshank Redemption (1994) 1080p BrRip - 1.6GB -YIFY", 714, 1.7, rejections=["Quality for release in queue already meets cutoff: Bluray-1080p v2"]),
+    _rel("The Shawshank Redemption 1994 REMASTERED 1080p BluRay H264 AAC LAMA[TGx]", 171, 2.9, rejections=["Quality for release in queue already meets cutoff: Bluray-1080p v2"]),
+    _rel("The Shawshank Redemption 1994 1080p BluRay x265 AAC 5 1 88", 294, 2.4),
+    _rel("The Shawshank Redemption 1994 bluray hdr 2160p av1 5 1 opus subs Dust", 152, 8.0, "Bluray-2160p", 2160),
+    _rel("The.Shawshank.Redemption.1994.2160p.UHD.BluRay.REMUX.DV.HDR.HEVC.DTS-HD.MA.5.1-F", 104, 58.3, "Remux-2160p", 2160),
+    _rel("The Shawshank Redemption 1994 1080p WEB H264 blocked", 400, 3.0, rejections=["Release is blocklisted"]),
+]
+
+
+def test_play_now_picks_a_release_to_stream():
+    from continuo.video.playnow import best_release, streamable
+    assert streamable(SHAWSHANK[0], 142) is None, "2 sources, and Dolby Vision"
+    assert streamable(SHAWSHANK[4], 142) is None and streamable(SHAWSHANK[5], 142) is None, "4K, a remux"
+    assert streamable(SHAWSHANK[6], 142) is None, "blocklisted"
+    assert streamable(SHAWSHANK[2], 142) is not None, "a release already queued doesn't rule another out"
+    assert best_release(SHAWSHANK, 142)["title"].endswith("LAMA[TGx]"), "well seeded, H.264, a sensible bitrate"
+    assert best_release(SHAWSHANK[:1], 142) is None
+
+
+def test_a_new_play_now_grabs_its_own_release(vclient, fake):
+    fake.on("GET", f"{TMDB}/movie/278", {"id": 278, "title": "The Shawshank Redemption", "release_date": "1994-09-23"})
+    fake.on("GET", f"{RADARR}/movie", [])
+    fake.on("GET", f"{RADARR}/movie/lookup/tmdb", {"tmdbId": 278, "title": "The Shawshank Redemption"})
+    fake.on("POST", f"{RADARR}/movie", {"id": 38, "runtime": 142})
+    fake.on("GET", f"{RADARR}/release", SHAWSHANK)
+    fake.on("POST", f"{RADARR}/release", {"approved": True})
+    make_user()
+    s = login(vclient)
+    vclient.post("/v1/video/play-now", json={"tmdbId": 278}, headers=bearer(s))
+    for _ in range(50):
+        if fake.called("POST", f"{RADARR}/release"):
+            break
+        import time
+        time.sleep(0.05)
+    added = fake.body(fake.called("POST", f"{RADARR}/movie")[0])
+    assert added["addOptions"] == {"searchForMovie": False}, "Radarr doesn't pick: Play now does"
+    assert fake.body(fake.called("POST", f"{RADARR}/release")[0])["guid"].endswith("LAMA[TGx]")
+
+
+def test_a_slow_download_is_swapped_for_a_faster_one(vclient, fake):
+    make_user()
+    s = login(vclient)
+    rid = _request()
+    fake.on("GET", f"{RADARR}/movie/7", {"id": 7, "runtime": 142})
+    fake.on("GET", f"{RADARR}/release", SHAWSHANK)
+    fake.on("GET", f"{RADARR}/queue/details", [{"id": 91, "movieId": 7, "downloadId": HASH, "protocol": "torrent", "title": SHAWSHANK[0]["title"]}])
+    fake.on("DELETE", f"{RADARR}/queue/91", {})
+    fake.on("POST", f"{RADARR}/release", {"approved": True})
+    r = vclient.post(f"/v1/video/play-now/{rid}/faster", headers=bearer(s))
+    assert r.status_code == 200 and r.json()["title"].endswith("LAMA[TGx]")
+    dropped = fake.called("DELETE", f"{RADARR}/queue/91")[0].url.params
+    assert (dropped["removeFromClient"], dropped["blocklist"]) == ("true", "true")
+    fake.on("GET", f"{RADARR}/release", SHAWSHANK[:1])
+    assert vclient.post(f"/v1/video/play-now/{rid}/faster", headers=bearer(s)).status_code == 404
+
+
+def test_too_slow_to_watch_says_so(vclient, fake, monkeypatch):
+    make_user()
+    s = login(vclient)
+    rid = _request()
+    _torrent(fake, vclient, 100 * PIECE, have_pieces=1, total_pieces=101)
+    fake.on("GET", f"{QBT}/torrents/info", [{"hash": HASH.lower(), "piece_size": PIECE, "progress": 0.02, "dlspeed": 0, "time_active": 300,
+                                             "seq_dl": True, "f_l_piece_prio": True, "save_path": "/data/downloads/",
+                                             "download_path": "/data/downloads/incomplete"}])
+    assert vclient.get(f"/v1/video/play-now/{rid}", headers=bearer(s)).json()["tooSlow"] is True

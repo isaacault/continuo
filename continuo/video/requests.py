@@ -12,8 +12,9 @@ from .upstream import radarr, sonarr, tmdb
 log = logging.getLogger("continuo")
 
 
-async def start(request_id: int) -> None:
-    """Hands a new request to Radarr (a film) or Sonarr (a series: the asked seasons)."""
+async def start(request_id: int, play_now: bool = False) -> None:
+    """Hands a new request to Radarr (a film) or Sonarr (a series: the asked seasons). Play now picks
+    the film's release itself (one to stream: well seeded, not 4K or HDR), Radarr's search if none."""
     req = db.get(request_id)
     if not req:
         return
@@ -21,12 +22,23 @@ async def start(request_id: int) -> None:
         await _start_series(req)
         return
     try:
-        movie = await radarr.add(req["tmdb_id"])
+        movie = await radarr.add(req["tmdb_id"], search=not play_now)
     except httpx.HTTPError as e:
         db.update(request_id, status="failed", error=f"Radarr: {e}")
         await _notify(db.get(request_id), "video_request_failed")
         return
     db.update(request_id, status="searching", radarr_movie_id=movie.get("id"))
+    if play_now:
+        from . import playnow
+        try:
+            if not await playnow.pick_and_grab(movie):
+                await radarr.search(movie["id"])
+        except httpx.HTTPError as e:
+            log.warning("play now %s: picking a release failed (%s): Radarr searches instead", request_id, e)
+            try:
+                await radarr.search(movie["id"])
+            except httpx.HTTPError:
+                pass
 
 
 async def _start_series(req: dict) -> None:
