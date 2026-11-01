@@ -1,7 +1,7 @@
 """Sonarr, the wanted list for series (Sonarr keys on TVDB IDs; continuo gets them from TMDB).
 A request monitors and searches exactly the seasons asked for (all aired seasons when none are
-named; specials left out), never "future episodes too" unless asked (docs/design/video.md §12.4,
-assumed)."""
+named; specials left out), and future episodes too, so new ones arrive as they air (the user's
+choice, docs/design/video.md §12.4)."""
 import httpx
 
 from ... import config
@@ -37,7 +37,7 @@ def wanted(seasons: list[dict], asked: list[int] | None) -> list[dict]:
     return out
 
 
-async def request(tvdb_id: int, seasons: list[int] | None, future: bool = False) -> dict:
+async def request(tvdb_id: int, seasons: list[int] | None, future: bool = True) -> dict:
     """Adds the series (only the asked seasons monitored, searched now), or for one already in
     Sonarr monitors and searches the asked seasons too. Returns Sonarr's series."""
     s = config.settings
@@ -58,6 +58,7 @@ async def request(tvdb_id: int, seasons: list[int] | None, future: bool = False)
     asked = seasons if seasons is not None else [x["seasonNumber"] for x in existing.get("seasons") or []
                                                  if x.get("seasonNumber", 0) > 0]
     updated = {**existing, "monitored": True,
+               **({"monitorNewItems": "all"} if future else {}),
                "seasons": [{**x, "monitored": True} if x.get("seasonNumber") in asked else x
                            for x in existing.get("seasons") or []]}
     r = await _client().put(f"/series/{existing['id']}", json=updated)
