@@ -29,6 +29,8 @@ def vclient(fake, tmp_path, monkeypatch):
     from continuo.video import playnow
     from continuo.video.upstream import qbittorrent
     playnow._layouts.clear()
+    playnow._swapped.clear()
+    playnow._mode_checked.clear()
     qbittorrent._flipped.clear()
     monkeypatch.setattr(qbittorrent, "SETTLE_CHECK_SECONDS", 0)
     with TestClient(create_app(disable_workers=True)) as c:
@@ -337,3 +339,43 @@ def test_too_slow_to_watch_says_so(vclient, fake, monkeypatch):
                                              "seq_dl": True, "f_l_piece_prio": True, "save_path": "/data/downloads/",
                                              "download_path": "/data/downloads/incomplete"}])
     assert vclient.get(f"/v1/video/play-now/{rid}", headers=bearer(s)).json()["tooSlow"] is True
+
+
+def test_a_thin_first_answer_is_searched_again(vclient, fake, monkeypatch):
+    """Interstellar: the first answer (one indexer, seconds in) had only a 10-seed copy."""
+    from continuo.video import playnow
+    monkeypatch.setattr(playnow, "RESEARCH_SECONDS", 0)
+    calls = {"n": 0}
+    thin = [_rel("Interstellar 2014 1080p Bluray x264-SURGE", 10, 6.4)]
+    full = thin + [_rel("Interstellar 2014 1080p ATVP WEB DL DD 5 1 H 264 PiRaTeS", 88, 8.9)]
+
+    def releases(r):
+        calls["n"] += 1
+        return httpx.Response(200, json=thin if calls["n"] == 1 else full)
+    fake.on("GET", f"{RADARR}/release", handler=releases)
+    fake.on("POST", f"{RADARR}/release", {"approved": True})
+    chosen = run(playnow.pick_and_grab({"id": 40, "runtime": 169}))
+    assert calls["n"] == 2 and chosen["title"].endswith("PiRaTeS")
+    calls["n"] = 0
+    fake.on("GET", f"{RADARR}/release", thin)
+    assert run(playnow.pick_and_grab({"id": 40, "runtime": 169}))["title"].endswith("SURGE"), "nothing better: settle for fewer"
+
+
+def test_a_copy_with_few_real_sources_is_swapped_once(vclient, fake):
+    make_user()
+    s = login(vclient)
+    rid = _request()
+    _torrent(fake, vclient, 100 * PIECE, have_pieces=1, total_pieces=101)
+    fake.on("GET", f"{QBT}/torrents/info", [{"hash": HASH.lower(), "piece_size": PIECE, "progress": 0.05, "dlspeed": 10**9, "time_active": 120,
+                                             "num_seeds": 2, "seq_dl": True, "f_l_piece_prio": True, "save_path": "/data/downloads/",
+                                             "download_path": "/data/downloads/incomplete"}])
+    fake.on("GET", f"{RADARR}/queue/details", [{"id": 91, "movieId": 7, "downloadId": HASH, "protocol": "torrent", "title": "Thin.Copy.1080p.x264"}])
+    fake.on("GET", f"{RADARR}/movie/7", {"id": 7, "runtime": 142})
+    fake.on("GET", f"{RADARR}/release", [_rel("Thin.Copy.1080p.x264", 40, 3.0), *SHAWSHANK])
+    fake.on("DELETE", f"{RADARR}/queue/91", {})
+    fake.on("POST", f"{RADARR}/release", {"approved": True})
+    st = vclient.get(f"/v1/video/play-now/{rid}", headers=bearer(s)).json()
+    assert st["state"] == "searching" and "switched" in st["note"]
+    assert fake.body(fake.called("POST", f"{RADARR}/release")[0])["guid"].endswith("LAMA[TGx]"), "not the thin one again"
+    vclient.get(f"/v1/video/play-now/{rid}", headers=bearer(s))
+    assert len(fake.called("POST", f"{RADARR}/release")) == 1, "swapped once, not every look"

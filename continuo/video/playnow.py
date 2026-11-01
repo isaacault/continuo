@@ -6,6 +6,7 @@ Jellyfin has it, the app moves over to Jellyfin's copy."""
 import asyncio
 import hashlib
 import hmac
+import logging
 import os
 import re
 import time
@@ -16,6 +17,7 @@ from .. import config
 from . import index
 from .upstream import qbittorrent, radarr, sonarr
 
+log = logging.getLogger("continuo")
 LINK_SECONDS = 12 * 3600
 # Ready to start: this much of the start in hand (and, for an MP4, its end: the index lives there).
 READY_MIN_BYTES = 48 * 1024 * 1024
@@ -184,12 +186,26 @@ async def status(req: dict, ep: Ep = None) -> dict:
     # Slower than it plays (a two-hour film assumed), a minute in: worth a faster copy.
     playback_rate = layout.size / (2 * 3600)
     too_slow = (t.get("time_active") or 0) > 60 and (t.get("progress") or 0) < 0.95 and (t.get("dlspeed") or 0) < playback_rate * 1.1
+    # What indexers listed isn't what's there: a film a minute and a half in with few real sources, or
+    # too slow, is swapped for the next best (once; a series' pack is left to the button).
+    if ep is None and req["id"] not in _swapped and (t.get("time_active") or 0) > VERIFY_AFTER_SECONDS and (t.get("progress") or 0) < 0.5 \
+            and ((t.get("num_seeds") or 0) < MIN_REAL_SOURCES or too_slow):
+        _swapped.add(req["id"])
+        try:
+            if await find_faster(req):
+                return {"state": "searching", "note": "That copy had too few sources: switched to a better-shared one."}
+        except httpx.HTTPError as e:
+            log.warning("play now %s: swapping a thin copy failed: %s", req["id"], e)
     return {"state": "ready" if ready else "downloading", "progress": t.get("progress") or 0, "tooSlow": too_slow,
             "contiguousBytes": have, "neededBytes": need, "sizeBytes": layout.size,
             "downloadSpeed": t.get("dlspeed") or 0, "seeds": t.get("num_seeds") or 0, "etaSeconds": t.get("eta"),
             "container": os.path.splitext(layout.name)[1].lstrip(".").lower(), "mime": layout.mime,
             "onDisk": bool(layout.path)}
 
+
+_swapped: set[int] = set()
+_mode_checked: dict[str, float] = {}
+MODE_RECHECK_SECONDS = 30
 
 # Where a request's file is, kept a minute: the player asks for the next 16 MB every few seconds, and
 # looking it up each time (Radarr's or Sonarr's queue, the torrent, its files) put a pause between them.
@@ -219,6 +235,12 @@ async def available(req: dict, start: int, ep: Ep = None) -> tuple[Layout, int]:
     if not found:
         raise LookupError("No file to play yet.")
     hash_, layout = found
+    # While it's being watched, keep it downloading in order (it has been found switched back off).
+    if time.monotonic() - _mode_checked.get(hash_, 0) > MODE_RECHECK_SECONDS:
+        _mode_checked[hash_] = time.monotonic()
+        t = await qbittorrent.torrent(hash_)
+        if t:
+            await qbittorrent.stream_mode(hash_, t)
     if start >= layout.size:
         return layout, start
     deadline = time.monotonic() + WAIT_SECONDS
@@ -239,11 +261,19 @@ _SOFT_REJECTIONS = ("already meets cutoff", "in queue", "is not an upgrade", "ex
 _HDR = re.compile(r"\b(dv|dovi|dolby[ ._-]?vision|hdr10\+?|hdr)\b", re.I)
 _H264 = re.compile(r"\b(x264|h[ ._]?264|avc)\b", re.I)
 _HEVC = re.compile(r"\b(x265|h[ ._]?265|hevc)\b", re.I)
-MIN_SEEDERS = 5
+# Indexers' seeder counts run high (Interstellar's SURGE: 10 listed, 2 in the swarm): ask for plenty,
+# settle for fewer only when nothing has them, and check the real swarm once it's downloading.
+MIN_SEEDERS = 20
+FALLBACK_SEEDERS = 5
+# Radarr's search answered within seconds with one indexer's results; a second look gets the rest.
+RESEARCH_SECONDS = 20
+# A minute and a half in, fewer real sources than this, or slower than it plays: swap it (once).
+VERIFY_AFTER_SECONDS = 90
+MIN_REAL_SOURCES = 5
 MAX_MBPS = 12.0
 
 
-def streamable(release: dict, runtime_minutes: int | None) -> float | None:
+def streamable(release: dict, runtime_minutes: int | None, min_seeders: int = MIN_SEEDERS) -> float | None:
     """How good a release is to watch while it downloads, or None when it isn't one: a torrent at
     1080p (720p will do), not 4K, a remux or HDR (for SDR screens and browsers), with enough
     sources, at a bitrate a home connection keeps up with. Most sources wins; H.264 (any browser
@@ -259,7 +289,7 @@ def streamable(release: dict, runtime_minutes: int | None) -> float | None:
     if resolution not in (720, 1080) or "remux" in (quality.get("name") or "").lower() or _HDR.search(title):
         return None
     seeders = release.get("seeders") or 0
-    if seeders < MIN_SEEDERS:
+    if seeders < min_seeders:
         return None
     mbps = (release.get("size") or 0) * 8 / ((runtime_minutes or 120) * 60) / 1e6
     if not 0.8 <= mbps <= MAX_MBPS:
@@ -271,16 +301,24 @@ def streamable(release: dict, runtime_minutes: int | None) -> float | None:
     return score
 
 
-def best_release(found: list[dict], runtime_minutes: int | None) -> dict | None:
-    scored = [(streamable(r, runtime_minutes), r) for r in found]
+def best_release(found: list[dict], runtime_minutes: int | None, min_seeders: int = MIN_SEEDERS,
+                 exclude: set[str] = frozenset()) -> dict | None:
+    scored = [(streamable(r, runtime_minutes, min_seeders), r) for r in found if r.get("title") not in exclude]
     scored = [(s, r) for s, r in scored if s is not None]
     return max(scored, key=lambda x: x[0])[1] if scored else None
 
 
 async def pick_and_grab(movie: dict) -> dict | None:
-    """Grabs the best release to stream for a film in Radarr; None when there isn't one."""
-    chosen = best_release(await radarr.releases(movie["id"]), movie.get("runtime"))
+    """Grabs the best release to stream for a film in Radarr; None when there isn't one. Without a
+    well-shared one at first, it looks again (the first answer can be one indexer's), then settles."""
+    runtime = movie.get("runtime")
+    chosen = best_release(await radarr.releases(movie["id"]), runtime)
+    if not chosen:
+        await asyncio.sleep(RESEARCH_SECONDS)
+        found = await radarr.releases(movie["id"])
+        chosen = best_release(found, runtime) or best_release(found, runtime, FALLBACK_SEEDERS)
     if chosen:
+        log.info("play now: grabbing %s (%s sources listed)", chosen.get("title"), chosen.get("seeders"))
         await radarr.grab(chosen)
     return chosen
 
@@ -291,12 +329,17 @@ async def find_faster(req: dict) -> dict | None:
     if not movie_id:
         return None
     movie = (await radarr._client().get(f"/movie/{movie_id}")).json()
-    chosen = best_release(await radarr.releases(movie_id), movie.get("runtime"))
+    queue = await radarr.queue_for(movie_id)
+    current = {q.get("title") for q in queue}
+    found = await radarr.releases(movie_id)
+    chosen = best_release(found, movie.get("runtime"), exclude=current) or \
+        best_release(found, movie.get("runtime"), FALLBACK_SEEDERS, exclude=current)
     if not chosen:
         return None
-    for q in await radarr.queue_for(movie_id):
-        if q.get("title") != chosen.get("title"):
-            await radarr.drop_download(q["id"])
+    for q in queue:
+        await radarr.drop_download(q["id"])
+    log.info("play now: swapping %s for %s (%s sources listed)", ", ".join(sorted(t for t in current if t)),
+             chosen.get("title"), chosen.get("seeders"))
     _layouts.pop((req["id"], None), None)
     await radarr.grab(chosen)
     return chosen
