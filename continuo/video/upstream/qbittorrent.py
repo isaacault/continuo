@@ -75,7 +75,15 @@ SETTLE_CHECK_SECONDS = 2.0
 
 
 async def stream_mode(hash_: str, t: dict) -> None:
-    """Sequential download, first and last pieces first: what playing it as it comes needs."""
+    """Sequential download, first and last pieces first: what playing it as it comes needs. With
+    QBITTORRENT_PLAY_NOW_TAG, the torrent is tagged and the tool that owns that tag switches it (two
+    switchers with toggles undo each other: the homelab's watchnow turned it off every 10 s)."""
+    tag = config.settings.qbittorrent_play_now_tag
+    if tag:
+        if tag not in [x.strip() for x in (t.get("tags") or "").split(",")]:
+            await _call("POST", "/torrents/addTags", data={"hashes": hash_.lower(), "tags": tag})
+            log.info("play now: %s tagged %s (that tool keeps it downloading in order)", hash_.lower()[:12], tag)
+        return
     if t.get("seq_dl") and t.get("f_l_piece_prio"):
         return
     async with _mode_lock:
