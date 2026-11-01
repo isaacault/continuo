@@ -165,3 +165,28 @@ def test_home_episodes_name_their_series(vclient, fake):
     h = vclient.get("/v1/video/home", headers=bearer(s)).json()
     assert h["continueWatching"][0]["seriesTmdbId"] == 1396
     assert fake.called("GET", f"{JELLYFIN}/UserItems/Resume")[0].url.params["userId"] == "jf-u1"
+
+
+
+def test_settings_say_how_the_apps_look(vclient, fake):
+    make_user()
+    s = login(vclient)
+    assert vclient.get("/v1/video/settings", headers=bearer(s)).json() == {"ui": "library", "animeLibraries": ["Anime"]}
+    config.reload(dict(os.environ, CONTINUO_MODULES="music,video", VIDEO_UI="netflix", VIDEO_ANIME_LIBRARIES="Anime, Anime films"))
+    assert vclient.get("/v1/video/settings", headers=bearer(s)).json() == {"ui": "netflix", "animeLibraries": ["Anime", "Anime films"]}
+    config.reload(dict(os.environ, CONTINUO_MODULES="music,video", VIDEO_UI="something-else"))
+    assert vclient.get("/v1/video/settings", headers=bearer(s)).json()["ui"] == "library", "anything else: the default"
+
+
+def test_explore_filters_anime_years_rating_language(vclient, fake):
+    fake.on("GET", f"{TMDB}/discover/tv", {"page": 1, "total_pages": 1, "results": []})
+    make_user()
+    s = login(vclient)
+    r = vclient.get("/v1/video/browse", params={"kind": "series", "genre": 10765, "anime": "true", "yearFrom": 2010, "yearTo": 2019,
+                                                "minRating": 7.5, "language": "ja", "sort": "new"}, headers=bearer(s))
+    assert r.status_code == 200, r.text
+    p = fake.called("GET", f"{TMDB}/discover/tv")[0].url.params
+    assert (p["with_genres"], p["with_origin_country"], p["with_original_language"]) == ("10765,16", "JP", "ja")
+    assert (p["first_air_date.gte"], p["first_air_date.lte"]) == ("2010-01-01", "2019-12-31"), "a range in the past stays in the past"
+    assert (p["vote_average.gte"], p["vote_count.gte"]) == ("7.5", "50")
+    assert vclient.get("/v1/video/browse", params={"kind": "movie", "language": "japanese"}, headers=bearer(s)).status_code == 422

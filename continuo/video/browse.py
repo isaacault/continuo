@@ -22,12 +22,25 @@ async def genres(kind: str = Query(..., pattern="^(movie|series)$"), _user: Curr
     return {"kind": kind, "genres": await _tmdb(tmdb.genres(kind))}
 
 
+@router.get("/settings")
+async def settings(_user: CurrentUser = Depends(require_user)) -> dict:
+    """How the video apps look on this server (an admin's choice) and which Jellyfin libraries are anime."""
+    from .. import config
+    s = config.settings
+    return {"ui": s.video_ui, "animeLibraries": list(s.video_anime_libraries)}
+
+
 @router.get("/browse")
 async def browse(kind: str = Query(..., pattern="^(movie|series)$"), genre: int | None = Query(None, ge=1),
                  sort: str = Query("popular", pattern="^(popular|top_rated|new)$"), page: int = Query(1, ge=1, le=500),
+                 anime: bool = Query(False), yearFrom: int | None = Query(None, ge=1874, le=2100),
+                 yearTo: int | None = Query(None, ge=1874, le=2100), minRating: float | None = Query(None, ge=0, le=10),
+                 language: str | None = Query(None, pattern="^[a-z]{2}$"),
                  _user: CurrentUser = Depends(require_user)) -> dict:
-    """One row or grid of films or series: by genre, ordered popular, top rated or new; paged."""
-    out = await _tmdb(tmdb.discover(kind, genre, sort, page))
+    """One row or grid of films or series: by genre, ordered popular, top rated or new; anime only,
+    years, a minimum score, an original language; paged."""
+    out = await _tmdb(tmdb.discover(kind, genre, sort, page, anime=anime, year_from=yearFrom, year_to=yearTo,
+                                    min_rating=minRating, language=language))
     return {"kind": kind, "genre": genre, "sort": sort, "page": out["page"], "totalPages": out["totalPages"],
             "results": [_hit(h) for h in out["results"]]}
 

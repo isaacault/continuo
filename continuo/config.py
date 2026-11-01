@@ -93,6 +93,10 @@ class Settings:
     # Anime (TMDB: animation from Japan) goes to Sonarr as its "anime" type, in its own folder (the
     # homelab's Jellyfin has an Anime library there). Unset: anime is filed with the other series.
     sonarr_anime_root_folder: str = ""
+    # How the video apps look, server-wide: "library" (Library | Explore | Search, Polyphony's way) or
+    # "netflix" (a billboard, rows, previews). And which Jellyfin libraries are anime (by name).
+    video_ui: str = "library"
+    video_anime_libraries: tuple[str, ...] = ("Anime",)
     sonarr_anime_quality_profile_id: int = 0          # 0: the series' profile
     video_index_seconds: int = 900
     # Notifications' links into the video app (its URL scheme; the app's name is still to be chosen).
@@ -301,6 +305,8 @@ def load(env: dict | None = None) -> Settings:
         sonarr_root_folder=_str(e, "SONARR_ROOT_FOLDER", "/tv"),
         sonarr_quality_profile_id=_int(e, "SONARR_QUALITY_PROFILE_ID", 1),
         sonarr_anime_root_folder=_url(e, "SONARR_ANIME_ROOT_FOLDER", ""),
+        video_ui=_str(e, "VIDEO_UI", "library") if _str(e, "VIDEO_UI", "library") in ("library", "netflix") else "library",
+        video_anime_libraries=tuple(x.strip() for x in _str(e, "VIDEO_ANIME_LIBRARIES", "Anime").split(",") if x.strip()),
         sonarr_anime_quality_profile_id=_int(e, "SONARR_ANIME_QUALITY_PROFILE_ID", 0),
         video_index_seconds=_int(e, "VIDEO_INDEX_SECONDS", 900),
         video_deep_link_scheme=_str(e, "VIDEO_DEEP_LINK_SCHEME", "watch"),
