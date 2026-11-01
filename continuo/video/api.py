@@ -37,7 +37,59 @@ def availability(kind: str, tmdb_id: int) -> dict:
 def _hit(h: dict) -> dict:
     return {"kind": h["kind"], "tmdbId": h["tmdbId"], "title": h["title"], "year": h["year"],
             "overview": h.get("overview"), "poster": _image(h.get("posterPath")),
+            "backdrop": _image(h.get("backdropPath"), "w780"), "genreIds": h.get("genreIds") or [],
+            "voteAverage": h.get("voteAverage"), "releaseDate": h.get("releaseDate"),
             "availability": availability(h["kind"], h["tmdbId"])}
+
+
+def _year_of(date: str | None) -> int | None:
+    return int(date[:4]) if (date or "")[:4].isdigit() else None
+
+
+def _certification(kind: str, body: dict) -> str | None:
+    """The age rating in the configured region (then the US's): "15", "PG-13", "TV-MA"."""
+    from .. import config
+    regions = [config.settings.tmdb_region, "US"]
+    if kind == "movie":
+        by = {r.get("iso_3166_1"): r for r in (body.get("release_dates") or {}).get("results") or []}
+        for region in regions:
+            for d in (by.get(region) or {}).get("release_dates") or []:
+                if d.get("certification"):
+                    return d["certification"]
+        return None
+    by = {r.get("iso_3166_1"): r.get("rating") for r in (body.get("content_ratings") or {}).get("results") or []}
+    return next((by[r] for r in regions if by.get(r)), None)
+
+
+def _extras(kind: str, body: dict, user: CurrentUser) -> dict:
+    """What a detail screen shows beyond the basics: cast, who made it, age rating, logo, More Like
+    This, trailer, and this account's My List and rating."""
+    from . import mylist
+    credits = body.get("credits") or {}
+    cast = [{"name": p.get("name"), "character": p.get("character") or None,
+             "photo": _image(p.get("profile_path"), "w185")}
+            for p in (credits.get("cast") or [])[:15] if p.get("name")]
+    crew = credits.get("crew") or []
+    if kind == "movie":
+        makers = [p["name"] for p in crew if p.get("job") == "Director" and p.get("name")]
+    else:
+        makers = [p["name"] for p in body.get("created_by") or [] if p.get("name")]
+    writers = list(dict.fromkeys(p["name"] for p in crew if p.get("department") == "Writing" and p.get("name")))[:4]
+    logos = (body.get("images") or {}).get("logos") or []
+    logo = next((lg.get("file_path") for lg in logos if lg.get("file_path")), None)
+    videos = (body.get("videos") or {}).get("results") or []
+    trailer = next((v["key"] for v in videos if v.get("site") == "YouTube" and v.get("type") == "Trailer"), None) or \
+        next((v["key"] for v in videos if v.get("site") == "YouTube" and v.get("type") == "Teaser"), None)
+    recs = [tmdb.normalize(h, "movie" if kind == "movie" else "tv")
+            for h in (body.get("recommendations") or {}).get("results") or []]
+    tmdb_id = body.get("id")
+    return {"tagline": body.get("tagline") or None, "voteAverage": body.get("vote_average") or None,
+            "certification": _certification(kind, body), "logo": _image(logo, "w500"),
+            "genreList": [{"id": g["id"], "name": g["name"]} for g in body.get("genres") or [] if g.get("id")],
+            "cast": cast, "directors" if kind == "movie" else "creators": makers, "writers": writers,
+            "trailerYouTubeKey": trailer, "moreLikeThis": [_hit(h) for h in recs if h][:18],
+            "inMyList": mylist.contains(user.id, kind, tmdb_id) if tmdb_id else False,
+            "myRating": mylist.rating(user.id, kind, tmdb_id) if tmdb_id else 0}
 
 
 @router.get("/search")
@@ -82,21 +134,25 @@ async def discover(_user: CurrentUser = Depends(require_user)) -> dict:
 
 
 @router.get("/movies/{tmdb_id}")
-async def movie(tmdb_id: int, _user: CurrentUser = Depends(require_user)) -> dict:
-    if not tmdb.configured():
-        raise ApiError(503, "catalog_not_configured", "This server has no TMDB key.")
-    try:
-        m = await tmdb.movie(tmdb_id)
-    except tmdb.Unavailable as e:
-        raise ApiError(503, "catalog_unavailable", "TMDB isn't answering right now.", True) from e
-    trailer = next((v["key"] for v in (m.get("videos") or {}).get("results") or []
-                    if v.get("site") == "YouTube" and v.get("type") == "Trailer"), None)
+async def movie(tmdb_id: int, user: CurrentUser = Depends(require_user)) -> dict:
+    """A film's page: what TMDB knows, what the library has, and where this account left off."""
+    m = await _tmdb(tmdb.movie(tmdb_id))
+    avail = availability("movie", tmdb_id)
+    progress = {"positionSeconds": 0, "played": False}
+    jf_user = await _jellyfin_user(user) if avail["state"] == "in_library" else None
+    if jf_user:
+        from .upstream import jellyfin
+        try:
+            got = await jellyfin.item(jf_user, avail["jellyfinId"])
+            progress = {"positionSeconds": got["positionSeconds"], "played": got["played"]}
+        except httpx.HTTPError:
+            pass
     return {"kind": "movie", "tmdbId": tmdb_id, "title": m.get("title") or "",
-            "year": int(m["release_date"][:4]) if (m.get("release_date") or "")[:4].isdigit() else None,
+            "year": _year_of(m.get("release_date")), "releaseDate": m.get("release_date") or None,
             "overview": m.get("overview") or None, "runtimeMinutes": m.get("runtime") or None,
             "genres": [g["name"] for g in m.get("genres") or [] if g.get("name")],
             "poster": _image(m.get("poster_path")), "backdrop": _image(m.get("backdrop_path"), "w1280"),
-            "trailerYouTubeKey": trailer, "availability": availability("movie", tmdb_id)}
+            **_extras("movie", m, user), **progress, "availability": avail}
 
 
 @router.get("/home")
@@ -114,6 +170,12 @@ async def home(user: CurrentUser = Depends(require_user)) -> dict:
         for name, result in zip(calls, results, strict=True):
             if not isinstance(result, BaseException):
                 shelves[name] = result
+    # An episode names its series' TMDB title too, so the apps can open the series from it.
+    for shelf in shelves.values():
+        for i in shelf:
+            if i["kind"] == "episode" and i.get("seriesJellyfinId"):
+                s = index.by_jellyfin(i["seriesJellyfinId"])
+                i["seriesTmdbId"] = s["tmdb_id"] if s else None
     onTheWay = [_request_out(r) for r in db.for_user(user.id) if r["status"] in db.ACTIVE]
     return {**shelves, "requests": onTheWay, "linked": jf_user is not None}
 
@@ -146,11 +208,23 @@ async def series_page(tmdb_id: int, user: CurrentUser = Depends(require_user)) -
         state = "in_library" if expected and got >= expected else "partial" if got else "missing"
         seasons.append({"number": n, "name": x.get("name"), "episodes": expected, "have": got,
                         "airDate": x.get("air_date"), "poster": _image(x.get("poster_path")), "state": state})
+    # What Play plays: Jellyfin's next episode for this account (the first, for a new series).
+    up_next = None
+    jf_user = await _jellyfin_user(user) if item else None
+    if jf_user:
+        from .upstream import jellyfin
+        try:
+            nxt = await jellyfin.next_up(jf_user, 1, series_id=item["jellyfin_id"])
+            up_next = nxt[0] if nxt else None
+        except httpx.HTTPError:
+            pass
     return {"kind": "series", "tmdbId": tmdb_id, "title": show.get("name") or "",
-            "year": int(show["first_air_date"][:4]) if (show.get("first_air_date") or "")[:4].isdigit() else None,
+            "year": _year_of(show.get("first_air_date")), "lastYear": _year_of(show.get("last_air_date")),
             "overview": show.get("overview") or None, "status": show.get("status"),
             "genres": [g["name"] for g in show.get("genres") or [] if g.get("name")],
             "poster": _image(show.get("poster_path")), "backdrop": _image(show.get("backdrop_path"), "w1280"),
+            "seasonCount": show.get("number_of_seasons"), "episodeRuntimeMinutes": (show.get("episode_run_time") or [None])[0],
+            **_extras("series", show, user), "upNext": up_next,
             "seasons": seasons, "availability": availability("series", tmdb_id)}
 
 
