@@ -90,6 +90,10 @@ class Settings:
     sonarr_api_key: str = ""
     sonarr_root_folder: str = "/tv"
     sonarr_quality_profile_id: int = 1
+    # Anime (TMDB: animation from Japan) goes to Sonarr as its "anime" type, in its own folder (the
+    # homelab's Jellyfin has an Anime library there). Unset: anime is filed with the other series.
+    sonarr_anime_root_folder: str = ""
+    sonarr_anime_quality_profile_id: int = 0          # 0: the series' profile
     video_index_seconds: int = 900
     # Notifications' links into the video app (its URL scheme; the app's name is still to be chosen).
     video_deep_link_scheme: str = "watch"
@@ -296,6 +300,8 @@ def load(env: dict | None = None) -> Settings:
         sonarr_api_key=_str(e, "SONARR_API_KEY"),
         sonarr_root_folder=_str(e, "SONARR_ROOT_FOLDER", "/tv"),
         sonarr_quality_profile_id=_int(e, "SONARR_QUALITY_PROFILE_ID", 1),
+        sonarr_anime_root_folder=_url(e, "SONARR_ANIME_ROOT_FOLDER", ""),
+        sonarr_anime_quality_profile_id=_int(e, "SONARR_ANIME_QUALITY_PROFILE_ID", 0),
         video_index_seconds=_int(e, "VIDEO_INDEX_SECONDS", 900),
         video_deep_link_scheme=_str(e, "VIDEO_DEEP_LINK_SCHEME", "watch"),
         qbittorrent_url=_url(e, "QBITTORRENT_URL", ""),

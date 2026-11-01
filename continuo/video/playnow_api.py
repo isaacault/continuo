@@ -67,9 +67,10 @@ async def _ensure_season(request_id: int, season: int) -> None:
         return
     db.update(request_id, seasons=json.dumps(sorted({*asked, season})))
     try:
-        tvdb = ((await tmdb.series(req["tmdb_id"])).get("external_ids") or {}).get("tvdb_id")
+        show = await tmdb.series(req["tmdb_id"])
+        tvdb = (show.get("external_ids") or {}).get("tvdb_id")
         if tvdb:
-            await sonarr.request(int(tvdb), [season])
+            await sonarr.request(int(tvdb), [season], anime=tmdb.is_anime(show))
     except (httpx.HTTPError, tmdb.Unavailable):
         pass
 
