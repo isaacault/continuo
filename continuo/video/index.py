@@ -39,6 +39,11 @@ def by_jellyfin(jellyfin_id: str) -> dict | None:
     return r[0] if r else None
 
 
+def forget(kind: str, tmdb_id: int) -> None:
+    with connect() as c:
+        c.execute("DELETE FROM video_library WHERE kind=? AND tmdb_id=?", (kind, tmdb_id))
+
+
 def all_items() -> list[dict]:
     with connect() as c:
         return rows(c.execute("SELECT * FROM video_library ORDER BY title"))

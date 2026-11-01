@@ -181,3 +181,10 @@ async def latest(user_id: str, limit: int = 16) -> list[dict]:
         "SortBy": "DateCreated", "SortOrder": "Descending", "Limit": limit, "Fields": "ProviderIds"})
     r.raise_for_status()
     return [summarize(i) for i in r.json().get("Items") or []]
+
+
+async def delete_item(item_id: str) -> None:
+    """Deletes the item and its files (Jellyfin's own delete, with the server's key)."""
+    r = await _client().delete(f"/Items/{item_id}")
+    if r.status_code != 404:
+        r.raise_for_status()
