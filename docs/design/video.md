@@ -155,11 +155,34 @@ The answer gains `movie`, `series` and `person` result kinds. A video-only serve
 - a storage limit, removing watched items first.
 They're evaluated on the device, using continuo's title pages for what's next.
 
-## 9. Not "Play now" (yet)
+## 9. Play now (watch while it downloads)
 
-Music's Play now streams a song while Soulseek fetches it. A film from a torrent can't do that reliably: playing while downloading needs pieces in order, healthy seeding and a container that plays incomplete. So video requests are request → notified when ready (usually minutes for popular titles), with the progress shown live.
+The first version left this out: a torrent arrives in pieces, out of order. The user asked for it,
+and it's built (#105–#113), tested on the homelab with *The Dog Stars*, *The Shawshank Redemption*
+and *Interstellar*.
 
-"Watch while downloading" can be tried later as an experiment, behind a setting: qBittorrent's sequential mode plus Jellyfin playing a growing file. It isn't in the first version.
+- **The release is Play now's pick, not Radarr's** (#108, #110). Radarr's choice for Shawshank was
+  an 8.5 GB Dolby Vision encode with 2 sources. Play now adds the film without Radarr's search and
+  picks from Radarr's interactive search:
+  - a torrent at 1080p (720p will do), not 4K, a remux or HDR;
+  - 20+ listed sources, searched again 20 s later if none (the first answer can be one indexer's),
+    then 5;
+  - 0.8–12 Mbit/s; most sources (counted to 150), H.264 and 2.5–8 Mbit/s preferred.
+  Listed counts run high (Interstellar's pick: 10 listed, 2 real), so 90 s in a film with fewer
+  than 5 real sources, or slower than it plays, is swapped once and the thin copy blocklisted.
+- **In order**: the torrent downloads sequentially, first and last pieces first. qBittorrent 5
+  only has toggles for these, and the homelab's watchnow switches them off on any torrent without
+  its tag every 10 s; so with `QBITTORRENT_PLAY_NOW_TAG` continuo tags the torrent and leaves the
+  switching to that tool (#111), else it switches them itself (one at a time, checked, #107/#109).
+- **Served as it arrives**: continuo serves the file only as far as it has arrived contiguously,
+  through a link signed for the account (a `<video>` sends no token); a range past that waits up to
+  25 s, then 503s and the player retries. Episodes: the file found in a season pack by its name
+  (#106). When Jellyfin has it, the player moves over at the same moment.
+- **The latest first, and Stop** (#112): the latest Play now gets the bandwidth (top of the queue,
+  no limit); older ones carry on into the library at 512 KB/s. Stop deletes the download and, for a
+  film Radarr has no file for, the film from Radarr; for an episode, its season stops being wanted.
+- **The limit is the home connection**: away from home (or on a VPN), the film goes out over the
+  home upload. On the LAN, a well-seeded 1080p copy starts in a minute or two.
 
 ## 10. Clients and SDKs
 
