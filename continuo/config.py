@@ -93,6 +93,13 @@ class Settings:
     video_index_seconds: int = 900
     # Notifications' links into the video app (its URL scheme; the app's name is still to be chosen).
     video_deep_link_scheme: str = "watch"
+    # Play now for films (watch while it downloads): qBittorrent, where Radarr's downloads go, and
+    # its download folder as continuo sees it (read-only; the same path as qBittorrent's by default).
+    qbittorrent_url: str = ""
+    qbittorrent_username: str = ""
+    qbittorrent_password: str = ""
+    video_downloads_dir: str = "/data/downloads"
+    qbittorrent_downloads_dir: str = "/data/downloads"
 
     # --- Navidrome ---
     navidrome_url: str = "http://localhost:4533"
@@ -287,6 +294,11 @@ def load(env: dict | None = None) -> Settings:
         sonarr_quality_profile_id=_int(e, "SONARR_QUALITY_PROFILE_ID", 1),
         video_index_seconds=_int(e, "VIDEO_INDEX_SECONDS", 900),
         video_deep_link_scheme=_str(e, "VIDEO_DEEP_LINK_SCHEME", "watch"),
+        qbittorrent_url=_url(e, "QBITTORRENT_URL", ""),
+        qbittorrent_username=_str(e, "QBITTORRENT_USERNAME"),
+        qbittorrent_password=_str(e, "QBITTORRENT_PASSWORD"),
+        video_downloads_dir=_url(e, "VIDEO_DOWNLOADS_DIR", "/data/downloads"),
+        qbittorrent_downloads_dir=_url(e, "QBITTORRENT_DOWNLOADS_DIR", "/data/downloads"),
         navidrome_url=_url(e, "NAVIDROME_URL", "http://localhost:4533"),
         navidrome_music_root=_url(e, "NAVIDROME_MUSIC_ROOT", "/music"),
         navidrome_service_user=_str(e, "NAVIDROME_SERVICE_USER", "continuo-svc"),

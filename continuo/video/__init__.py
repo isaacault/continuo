@@ -6,8 +6,8 @@ from typing import Callable
 
 
 def routers() -> list:
-    from . import api, browse
-    return [api.router, browse.router, api.admin_router]
+    from . import api, browse, playnow_api
+    return [api.router, browse.router, playnow_api.router, api.admin_router]
 
 
 def loops() -> dict[str, tuple[Callable[[], float], Callable]]:
@@ -23,10 +23,12 @@ def on_start() -> list[asyncio.Task]:
 
 
 def health_checks() -> dict:
-    from .upstream import jellyfin, radarr, sonarr, tmdb
+    from .upstream import jellyfin, qbittorrent, radarr, sonarr, tmdb
     checks = {"jellyfin": jellyfin.ping(), "radarr": radarr.ping(), "sonarr": sonarr.ping()}
     if tmdb.configured():
         checks["tmdb"] = tmdb.ping()
+    if qbittorrent.configured():
+        checks["qbittorrent"] = qbittorrent.ping()
     return checks
 
 

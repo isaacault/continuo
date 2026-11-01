@@ -1,5 +1,6 @@
 """continuo is reachable from the internet (continuo.ault.me): every route needs a signed-in user
 unless it's listed here, with why. A new route without auth fails this test."""
+import pytest
 from fastapi.routing import APIRoute
 
 from continuo.auth.deps import require_user
@@ -13,12 +14,28 @@ PUBLIC = {
     "/v1/artwork": "cover images in <img> tags; allow-listed sources, rate-limited",
     "/v1/events": "SSE: checks the token itself (Bearer, or ?token= for EventSource)",
     "/v1/play-now/{stream_id}/audio": "checks the token itself (Bearer, or a speaker's signed link: stream, device, expiry)",
+    "/v1/video/play-now/{request_id}/stream": "checks its signed link itself (request, account, expiry): a <video> sends no token",
     "/rest/getOpenSubsonicExtensions": "OpenSubsonic requires it unauthenticated",
     "/rest/getOpenSubsonicExtensions.view": "the same, by its .view name",
     "/internal/auth/subsonic": "Caddy's forward_auth; never routed from outside (Caddy answers 404)",
     "/internal/webhooks/lidarr": "Lidarr, with the webhook secret; Docker network only",
     "/internal/events/search": "torrent-cleanup, with the webhook secret; Docker network only",
 }
+
+
+@pytest.fixture
+def client(fake):
+    """Every part on: a route only a part adds (video's) is checked too."""
+    import os
+
+    from fastapi.testclient import TestClient
+
+    from continuo import config
+    from continuo.main import create_app
+    from continuo.modules import KNOWN
+    config.reload(dict(os.environ, CONTINUO_MODULES=",".join(sorted(KNOWN))))
+    with TestClient(create_app(disable_workers=True)) as c:
+        yield c
 
 
 def _needs_user(dependant) -> bool:
