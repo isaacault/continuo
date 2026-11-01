@@ -42,6 +42,11 @@ continuo/migrations/ numbered SQL migrations
 deploy/              compose, Caddy, docker-proxy, Home Assistant automation, env template
 ```
 
+## Install
+
+[docs/install.md](docs/install.md): music, video or both on a fresh machine, with
+`deploy/standalone/compose.yaml` (each part's servers are a Compose profile).
+
 ## Develop
 
 ```bash
