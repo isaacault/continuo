@@ -1,6 +1,9 @@
 """qBittorrent, where Radarr's downloads go: what Play now needs of it. A torrent downloaded in
 order (sequential, first and last pieces first) and which of its pieces have arrived, so the part
 of a film that's there can be played while the rest comes (docs/design/video.md §9)."""
+import asyncio
+import time
+
 import httpx
 
 from ... import config
@@ -61,10 +64,27 @@ async def piece_states(hash_: str) -> list[int]:
     return (await _call("GET", "/torrents/pieceStates", params={"hash": hash_.lower()})).json()
 
 
+# Both settings are toggles in qBittorrent's API: two checks at once each flipping one turned it back
+# off (seen on the homelab). One at a time, read fresh, and not again while a flip may not show yet.
+_mode_lock = asyncio.Lock()
+_flipped: dict[str, float] = {}
+FLIP_SETTLE_SECONDS = 30
+
+
 async def stream_mode(hash_: str, t: dict) -> None:
-    """Sequential download, first and last pieces first: what playing it as it comes needs. Both
-    are toggles in qBittorrent's API, so each is flipped only when it's off."""
-    if not t.get("seq_dl"):
-        await _call("POST", "/torrents/toggleSequentialDownload", data={"hashes": hash_.lower()})
-    if not t.get("f_l_piece_prio"):
-        await _call("POST", "/torrents/toggleFirstLastPiecePrio", data={"hashes": hash_.lower()})
+    """Sequential download, first and last pieces first: what playing it as it comes needs."""
+    if t.get("seq_dl") and t.get("f_l_piece_prio"):
+        return
+    async with _mode_lock:
+        if time.monotonic() - _flipped.get(hash_.lower(), -FLIP_SETTLE_SECONDS) < FLIP_SETTLE_SECONDS:
+            return
+        fresh = await torrent(hash_) or t
+        flipped = False
+        if not fresh.get("seq_dl"):
+            await _call("POST", "/torrents/toggleSequentialDownload", data={"hashes": hash_.lower()})
+            flipped = True
+        if not fresh.get("f_l_piece_prio"):
+            await _call("POST", "/torrents/toggleFirstLastPiecePrio", data={"hashes": hash_.lower()})
+            flipped = True
+        if flipped:
+            _flipped[hash_.lower()] = time.monotonic()

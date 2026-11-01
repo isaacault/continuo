@@ -188,14 +188,34 @@ async def status(req: dict, ep: Ep = None) -> dict:
             "onDisk": bool(layout.path)}
 
 
-async def available(req: dict, start: int, ep: Ep = None) -> tuple[Layout, int]:
-    """The file's layout and how far from [start] can be served now, waiting a while for a jump
-    ahead. Raises LookupError when there's no file yet, TimeoutError when it doesn't arrive."""
+# Where a request's file is, kept a minute: the player asks for the next 16 MB every few seconds, and
+# looking it up each time (Radarr's or Sonarr's queue, the torrent, its files) put a pause between them.
+_layouts: dict[tuple, tuple[float, str, Layout]] = {}
+LAYOUT_SECONDS = 60
+
+
+async def _layout(req: dict, ep: Ep) -> tuple[str, Layout] | None:
+    key = (req["id"], ep)
+    hit = _layouts.get(key)
+    if hit and hit[0] > time.monotonic() and os.path.exists(hit[2].path):
+        return hit[1], hit[2]
     hash_ = await find_download(req, ep)
     t = await qbittorrent.torrent(hash_) if hash_ else None
     layout = pick_file(t, await qbittorrent.files(hash_), ep) if t else None
     if not layout or not layout.path:
+        _layouts.pop(key, None)
+        return None
+    _layouts[key] = (time.monotonic() + LAYOUT_SECONDS, hash_, layout)
+    return hash_, layout
+
+
+async def available(req: dict, start: int, ep: Ep = None) -> tuple[Layout, int]:
+    """The file's layout and how far from [start] can be served now, waiting a while for a jump
+    ahead. Raises LookupError when there's no file yet, TimeoutError when it doesn't arrive."""
+    found = await _layout(req, ep)
+    if not found:
         raise LookupError("No file to play yet.")
+    hash_, layout = found
     if start >= layout.size:
         return layout, start
     deadline = time.monotonic() + WAIT_SECONDS
