@@ -1,0 +1,118 @@
+# continuo with music, video or both, for a fresh machine (docs/install.md). continuo always runs;
+# each part's servers are a Compose profile, and CONTINUO_MODULES in .env must name the same parts:
+#   docker compose --profile music up -d                    # CONTINUO_MODULES=music
+#   docker compose --profile video up -d                    # CONTINUO_MODULES=video
+#   docker compose --profile music --profile video up -d    # CONTINUO_MODULES=music,video
+# One ./data tree for every app (data/music, data/movies, data/tv, data/downloads), so the *arrs move
+# finished downloads by hard link rather than copy. Ports are published for setting the apps up;
+# put a reverse proxy with TLS in front of continuo (and Jellyfin, Navidrome) before going online.
+x-linuxserver: &linuxserver
+  restart: unless-stopped
+  environment:
+    PUID: ${PUID:-1000}
+    PGID: ${PGID:-1000}
+    TZ: ${TZ:-Etc/UTC}
+
+services:
+  continuo:
+    build: ../..                          # this repository's Dockerfile (no published image yet)
+    image: continuo:local
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    env_file: .env
+    environment:
+      TZ: ${TZ:-Etc/UTC}
+      # Music: the servers below, by their service names.
+      NAVIDROME_URL: http://navidrome:4533
+      NAVIDROME_MUSIC_ROOT: /music
+      LIDARR_URL: http://lidarr:8686
+      ROOT_FOLDER_PATH: /data/music
+      SLSKD_URL: http://slskd:5030
+      # Video.
+      JELLYFIN_URL: http://jellyfin:8096
+      RADARR_URL: http://radarr:7878
+      RADARR_ROOT_FOLDER: /data/movies
+      SONARR_URL: http://sonarr:8989
+      SONARR_ROOT_FOLDER: /data/tv
+    ports: ["8080:8080"]
+    volumes:
+      - ./appdata/continuo:/data
+
+  # --- music -----------------------------------------------------------------------------------
+  navidrome:
+    image: deluan/navidrome:latest
+    profiles: ["music"]
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports: ["4533:4533"]
+    volumes:
+      - ./appdata/navidrome:/data
+      - ./data/music:/music:ro
+  lidarr:
+    <<: *linuxserver
+    image: lscr.io/linuxserver/lidarr:latest
+    profiles: ["music"]
+    ports: ["8686:8686"]
+    volumes:
+      - ./appdata/lidarr:/config
+      - ./data:/data
+  slskd:
+    image: slskd/slskd:latest
+    profiles: ["music"]
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      SLSKD_REMOTE_CONFIGURATION: "true"
+    ports: ["5030:5030"]
+    volumes:
+      - ./appdata/slskd:/app
+      - ./data/downloads/soulseek:/app/downloads
+
+  # --- video -----------------------------------------------------------------------------------
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    profiles: ["video"]
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports: ["8096:8096"]
+    volumes:
+      - ./appdata/jellyfin/config:/config
+      - ./appdata/jellyfin/cache:/cache
+      - ./data/movies:/data/movies:ro
+      - ./data/tv:/data/tv:ro
+  radarr:
+    <<: *linuxserver
+    image: lscr.io/linuxserver/radarr:latest
+    profiles: ["video"]
+    ports: ["7878:7878"]
+    volumes:
+      - ./appdata/radarr:/config
+      - ./data:/data
+  sonarr:
+    <<: *linuxserver
+    image: lscr.io/linuxserver/sonarr:latest
+    profiles: ["video"]
+    ports: ["8989:8989"]
+    volumes:
+      - ./appdata/sonarr:/config
+      - ./data:/data
+  prowlarr:
+    <<: *linuxserver
+    image: lscr.io/linuxserver/prowlarr:latest
+    profiles: ["video"]
+    ports: ["9696:9696"]
+    volumes:
+      - ./appdata/prowlarr:/config
+  qbittorrent:
+    <<: *linuxserver
+    image: lscr.io/linuxserver/qbittorrent:latest
+    profiles: ["video"]
+    ports: ["8085:8085"]
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Etc/UTC}
+      WEBUI_PORT: "8085"
+    volumes:
+      - ./appdata/qbittorrent:/config
+      - ./data/downloads:/data/downloads

@@ -1,0 +1,4 @@
+# What running the stack here creates: secrets, media and app settings.
+.env
+data/
+appdata/
