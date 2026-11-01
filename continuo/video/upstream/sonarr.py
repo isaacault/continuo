@@ -76,7 +76,8 @@ async def series(series_id: int) -> dict:
 
 
 async def queue_for(series_id: int) -> list[dict]:
-    r = await _client().get("/queue/details", params={"seriesId": series_id})
+    """The series' downloads in flight, each with its episode (season and number)."""
+    r = await _client().get("/queue/details", params={"seriesId": series_id, "includeEpisode": "true"})
     r.raise_for_status()
     body = r.json()
     return body if isinstance(body, list) else body.get("records") or []
