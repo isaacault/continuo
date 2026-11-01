@@ -84,7 +84,8 @@ def test_a_series_request_adds_only_the_asked_seasons_and_ends_available(vclient
     run(requests.start(rid))
     body = fake.body(fake.called("POST", f"{SONARR}/series")[0])
     assert [(x["seasonNumber"], x["monitored"]) for x in body["seasons"]] == [(0, False), (1, False), (2, True)]
-    assert body["monitorNewItems"] == "none" and body["addOptions"] == {"searchForMissingEpisodes": True}
+    # Future episodes too: new ones arrive as they air (the user's choice).
+    assert body["monitorNewItems"] == "all" and body["addOptions"] == {"searchForMissingEpisodes": True}
     assert body["qualityProfileId"] == 6 and body["rootFolderPath"] == "/tv"
     assert db.get(rid)["status"] == "searching" and db.get(rid)["sonarr_series_id"] == 5
     # complete in Sonarr, in Jellyfin: available
@@ -106,6 +107,7 @@ def test_a_series_already_in_sonarr_gets_the_asked_seasons_monitored_and_searche
     run(sonarr.request(81189, [2]))
     put = fake.body(fake.called("PUT", f"{SONARR}/series/5")[0])
     assert [(x["seasonNumber"], x["monitored"]) for x in put["seasons"]] == [(1, True), (2, True)]
+    assert put["monitorNewItems"] == "all", "a series already there gets future episodes too"
     assert [fake.body(c) for c in fake.called("POST", f"{SONARR}/command")] == [{"name": "SeasonSearch", "seriesId": 5, "seasonNumber": 2}]
 
 
