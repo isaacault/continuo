@@ -29,7 +29,7 @@ def _link(user_id=1):
 
 def test_home_has_jellyfins_shelves_and_the_requests_on_their_way(vclient, fake):
     from continuo.video import db
-    fake.on("GET", f"{JELLYFIN}/Users/jf-u1/Items/Resume", {"Items": [
+    fake.on("GET", f"{JELLYFIN}/UserItems/Resume", {"Items": [
         {"Id": "e1", "Type": "Episode", "Name": "Pilot", "SeriesName": "Breaking Bad", "SeriesId": "jf-bb",
          "ParentIndexNumber": 1, "IndexNumber": 1, "RunTimeTicks": 34_800_000_000, "UserData": {"PlaybackPositionTicks": 6_000_000_000}}]})
     fake.on("GET", f"{JELLYFIN}/Shows/NextUp", {"Items": [{"Id": "e2", "Type": "Episode", "Name": "Cat's in the Bag...",
@@ -59,7 +59,7 @@ def test_home_without_a_jellyfin_user_or_with_jellyfin_down(vclient, fake):
     h = vclient.get("/v1/video/home", headers=bearer(s)).json()
     assert h == {"continueWatching": [], "nextUp": [], "recentlyAdded": [], "requests": [], "linked": False}
     _link()
-    fake.on("GET", f"{JELLYFIN}/Users/jf-u1/Items/Resume", handler=lambda r: httpx.Response(500))
+    fake.on("GET", f"{JELLYFIN}/UserItems/Resume", handler=lambda r: httpx.Response(500))
     fake.on("GET", f"{JELLYFIN}/Shows/NextUp", {"Items": []})
     fake.on("GET", f"{JELLYFIN}/Items", {"Items": []})
     assert vclient.get("/v1/video/home", headers=bearer(s)).json()["continueWatching"] == [], "a shelf that fails is empty"

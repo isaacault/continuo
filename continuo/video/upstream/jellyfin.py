@@ -144,16 +144,33 @@ def summarize(item: dict) -> dict:
 
 
 async def resume(user_id: str, limit: int = 12) -> list[dict]:
-    r = await _client().get(f"/Users/{user_id}/Items/Resume", params={
-        "Limit": limit, "MediaTypes": "Video", "Fields": "ProviderIds"})
+    # /UserItems/Resume: Jellyfin 12's path (the old /Users/{id}/Items/Resume isn't in its API any more).
+    r = await _client().get("/UserItems/Resume", params={
+        "userId": user_id, "Limit": limit, "MediaTypes": "Video", "Fields": "ProviderIds"})
     r.raise_for_status()
     return [summarize(i) for i in r.json().get("Items") or []]
 
 
-async def next_up(user_id: str, limit: int = 12) -> list[dict]:
-    r = await _client().get("/Shows/NextUp", params={"UserId": user_id, "Limit": limit, "Fields": "ProviderIds"})
+async def next_up(user_id: str, limit: int = 12, series_id: str | None = None) -> list[dict]:
+    params = {"UserId": user_id, "Limit": limit, "Fields": "ProviderIds"}
+    if series_id:
+        params["SeriesId"] = series_id
+    r = await _client().get("/Shows/NextUp", params=params)
     r.raise_for_status()
     return [summarize(i) for i in r.json().get("Items") or []]
+
+
+async def item(user_id: str, item_id: str) -> dict:
+    """One item with this user's watch state (summarize's shape)."""
+    r = await _client().get(f"/Items/{item_id}", params={"userId": user_id, "Fields": "ProviderIds"})
+    r.raise_for_status()
+    return summarize(r.json())
+
+
+async def set_played(user_id: str, item_id: str, played: bool) -> None:
+    """Marks an item (a film, an episode, or a whole series or season) watched or not."""
+    r = await (_client().post if played else _client().delete)(f"/UserPlayedItems/{item_id}", params={"userId": user_id})
+    r.raise_for_status()
 
 
 async def latest(user_id: str, limit: int = 16) -> list[dict]:

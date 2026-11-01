@@ -6,8 +6,8 @@ from typing import Callable
 
 
 def routers() -> list:
-    from . import api
-    return [api.router, api.admin_router]
+    from . import api, browse
+    return [api.router, browse.router, api.admin_router]
 
 
 def loops() -> dict[str, tuple[Callable[[], float], Callable]]:

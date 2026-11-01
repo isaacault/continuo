@@ -33,6 +33,12 @@ def by_tmdb(kind: str, tmdb_id: int) -> dict | None:
     return r[0] if r else None
 
 
+def by_jellyfin(jellyfin_id: str) -> dict | None:
+    with connect() as c:
+        r = rows(c.execute("SELECT * FROM video_library WHERE jellyfin_id=? LIMIT 1", (jellyfin_id,)))
+    return r[0] if r else None
+
+
 def all_items() -> list[dict]:
     with connect() as c:
         return rows(c.execute("SELECT * FROM video_library ORDER BY title"))
