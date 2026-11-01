@@ -16,7 +16,7 @@ HASH = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
 
 
 @pytest.fixture
-def vclient(fake, tmp_path):
+def vclient(fake, tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     from continuo.main import create_app
@@ -30,6 +30,7 @@ def vclient(fake, tmp_path):
     from continuo.video.upstream import qbittorrent
     playnow._layouts.clear()
     qbittorrent._flipped.clear()
+    monkeypatch.setattr(qbittorrent, "SETTLE_CHECK_SECONDS", 0)
     with TestClient(create_app(disable_workers=True)) as c:
         c.downloads = downloads
         yield c
@@ -238,7 +239,13 @@ def test_the_download_mode_is_flipped_once_not_back(vclient, fake):
 
     async def both():
         await asyncio.gather(qbittorrent.stream_mode(HASH, stale), qbittorrent.stream_mode(HASH, stale), qbittorrent.stream_mode(HASH, stale))
-    run(both())
+    import pytest as _pytest
+    mp = _pytest.MonkeyPatch()
+    mp.setattr(qbittorrent, "SETTLE_CHECK_SECONDS", 0)
+    try:
+        run(both())
+    finally:
+        mp.undo()
     assert flips == ["seq", "fl"] and state == {"seq": True, "fl": True}
 
 

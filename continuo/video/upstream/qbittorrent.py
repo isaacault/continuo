@@ -2,6 +2,7 @@
 order (sequential, first and last pieces first) and which of its pieces have arrived, so the part
 of a film that's there can be played while the rest comes (docs/design/video.md §9)."""
 import asyncio
+import logging
 import time
 
 import httpx
@@ -9,6 +10,7 @@ import httpx
 from ... import config
 from ...upstream import http
 
+log = logging.getLogger("continuo")
 VIDEO_EXTENSIONS = (".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm", ".ts")
 
 
@@ -69,6 +71,7 @@ async def piece_states(hash_: str) -> list[int]:
 _mode_lock = asyncio.Lock()
 _flipped: dict[str, float] = {}
 FLIP_SETTLE_SECONDS = 30
+SETTLE_CHECK_SECONDS = 2.0
 
 
 async def stream_mode(hash_: str, t: dict) -> None:
@@ -88,3 +91,12 @@ async def stream_mode(hash_: str, t: dict) -> None:
             flipped = True
         if flipped:
             _flipped[hash_.lower()] = time.monotonic()
+            # qBittorrent 5 has only toggles: say what was done and whether it stuck, so a setting that
+            # comes back off (seen on the homelab) can be traced.
+            log.info("play now: %s was in order=%s, first/last first=%s: switched on", hash_.lower()[:12],
+                     fresh.get("seq_dl"), fresh.get("f_l_piece_prio"))
+            await asyncio.sleep(SETTLE_CHECK_SECONDS)
+            after = await torrent(hash_) or {}
+            if not (after.get("seq_dl") and after.get("f_l_piece_prio")):
+                log.warning("play now: %s didn't stay on (in order=%s, first/last first=%s)", hash_.lower()[:12],
+                            after.get("seq_dl"), after.get("f_l_piece_prio"))
