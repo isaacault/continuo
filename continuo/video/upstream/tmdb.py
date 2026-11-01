@@ -177,3 +177,11 @@ async def upcoming() -> list[dict]:
 async def on_the_air() -> list[dict]:
     """Series with episodes airing in the coming week."""
     return _results(await _get("/tv/on_the_air"), "tv")
+
+
+def is_anime(show: dict) -> bool:
+    """Anime, as TMDB has it: animation (genre 16) made in Japan (origin country, or Japanese as the
+    original language)."""
+    genres = {g.get("id") for g in show.get("genres") or []} | set(show.get("genre_ids") or [])
+    japanese = "JP" in (show.get("origin_country") or []) or show.get("original_language") == "ja"
+    return 16 in genres and japanese

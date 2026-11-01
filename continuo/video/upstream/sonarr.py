@@ -37,7 +37,7 @@ def wanted(seasons: list[dict], asked: list[int] | None) -> list[dict]:
     return out
 
 
-async def request(tvdb_id: int, seasons: list[int] | None, future: bool = True) -> dict:
+async def request(tvdb_id: int, seasons: list[int] | None, future: bool = True, anime: bool = False) -> dict:
     """Adds the series (only the asked seasons monitored, searched now), or for one already in
     Sonarr monitors and searches the asked seasons too. Returns Sonarr's series."""
     s = config.settings
@@ -48,8 +48,13 @@ async def request(tvdb_id: int, seasons: list[int] | None, future: bool = True) 
         found = next((x for x in lookup.json() if x.get("tvdbId") == tvdb_id), None)
         if found is None:
             raise LookupError("Sonarr doesn't know this series.")
+        # Anime: Sonarr's anime type (absolute numbering, anime release names) in the anime folder.
+        as_anime = anime and bool(s.sonarr_anime_root_folder)
         body = {**found, "seasons": wanted(found.get("seasons") or [], seasons),
-                "qualityProfileId": s.sonarr_quality_profile_id, "rootFolderPath": s.sonarr_root_folder,
+                "qualityProfileId": (s.sonarr_anime_quality_profile_id or s.sonarr_quality_profile_id) if as_anime
+                else s.sonarr_quality_profile_id,
+                "rootFolderPath": s.sonarr_anime_root_folder if as_anime else s.sonarr_root_folder,
+                "seriesType": "anime" if as_anime else "standard",
                 "monitored": True, "seasonFolder": True, "monitorNewItems": "all" if future else "none",
                 "addOptions": {"searchForMissingEpisodes": True}}
         r = await _client().post("/series", json=body)

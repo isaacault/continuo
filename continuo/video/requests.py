@@ -48,7 +48,8 @@ async def _start_series(req: dict) -> None:
         tvdb = (show.get("external_ids") or {}).get("tvdb_id")
         if not tvdb:
             raise LookupError("TMDB knows no TVDB ID for this series, which Sonarr needs.")
-        added = await sonarr.request(int(tvdb), json.loads(req["seasons"]) if req["seasons"] else None)
+        added = await sonarr.request(int(tvdb), json.loads(req["seasons"]) if req["seasons"] else None,
+                                     anime=tmdb.is_anime(show))
     except (httpx.HTTPError, LookupError, tmdb.Unavailable) as e:
         db.update(req["id"], status="failed", error=f"Sonarr: {e}" if isinstance(e, httpx.HTTPError) else str(e))
         await _notify(db.get(req["id"]), "video_request_failed")

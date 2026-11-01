@@ -119,3 +119,24 @@ def test_a_series_tmdb_cant_map_to_tvdb_fails_with_a_reason(vclient, fake):
     rid = vclient.post("/v1/video/requests", json={"kind": "series", "tmdbId": 99}, headers=bearer(s)).json()["request"]["id"]
     run(requests.start(rid))
     assert db.get(rid)["status"] == "failed" and "TVDB" in db.get(rid)["error"]
+
+
+
+def test_anime_goes_to_sonarrs_anime_folder_as_anime(vclient, fake):
+    """The homelab's Sonarr keeps anime in /data/anime as its anime type (Jellyfin's Anime library)."""
+    from continuo.video import db, requests
+    from continuo.video.upstream import tmdb
+    config.reload(dict(os.environ, CONTINUO_MODULES="music,video", SONARR_URL="http://sonarr.test", SONARR_API_KEY="so",
+                       TMDB_API_KEY="tm", SONARR_ROOT_FOLDER="/tv", SONARR_ANIME_ROOT_FOLDER="/anime", SONARR_QUALITY_PROFILE_ID="7"))
+    frieren = {"id": 209867, "name": "Frieren", "genres": [{"id": 16}, {"id": 10765}], "origin_country": ["JP"],
+               "external_ids": {"tvdb_id": 424536}, "seasons": [{"season_number": 1, "episode_count": 28}]}
+    assert tmdb.is_anime(frieren) and not tmdb.is_anime({**frieren, "origin_country": ["US"], "original_language": "en"})
+    assert not tmdb.is_anime({**frieren, "genres": [{"id": 18}]}), "Japanese, not animated: a drama"
+    fake.on("GET", f"{TMDB}/tv/209867", frieren)
+    fake.on("GET", f"{SONARR}/series", [])
+    fake.on("GET", f"{SONARR}/series/lookup", [{"tvdbId": 424536, "title": "Frieren", "seasons": [{"seasonNumber": 1}]}])
+    fake.on("POST", f"{SONARR}/series", handler=lambda r: httpx.Response(201, json={"id": 9, **fake.body(r)}))
+    req = db.create(kind="series", tmdb_id=209867, title="Frieren", year=2023, poster_path=None, user_id=None)
+    run(requests.start(req["id"]))
+    body = fake.body(fake.called("POST", f"{SONARR}/series")[0])
+    assert (body["seriesType"], body["rootFolderPath"], body["qualityProfileId"]) == ("anime", "/anime", 7)
