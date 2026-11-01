@@ -148,22 +148,39 @@ async def genres(kind: str) -> list[dict]:
 SORTS = {"popular": "popularity.desc", "top_rated": "vote_average.desc", "new": "primary_release_date.desc"}
 
 
-async def discover(kind: str, genre: int | None = None, sort: str = "popular", page: int = 1) -> dict:
+async def discover(kind: str, genre: int | None = None, sort: str = "popular", page: int = 1, *, anime: bool = False,
+                   year_from: int | None = None, year_to: int | None = None, min_rating: float | None = None,
+                   language: str | None = None) -> dict:
     """{results, page, totalPages}: films or series, by genre, ordered. "top_rated" needs enough
-    votes to mean something; "new" only what's already out."""
+    votes to mean something; "new" only what's already out. Anime: animation made in Japan (as
+    is_anime has it). Years, a minimum score and the original language narrow it."""
     s = config.settings
     order = SORTS.get(sort, SORTS["popular"])
+    date_field = "primary_release_date" if kind == "movie" else "first_air_date"
     if kind != "movie":
         order = order.replace("primary_release_date", "first_air_date")
     params: dict = {"sort_by": order, "page": page, "include_adult": "false", "watch_region": s.tmdb_region}
-    if genre:
-        params["with_genres"] = genre
+    genres = [g for g in (genre, 16 if anime else None) if g]
+    if genres:
+        params["with_genres"] = ",".join(str(g) for g in dict.fromkeys(genres))     # comma: all of them
+    if anime:
+        params["with_origin_country"] = "JP"
+    if year_from:
+        params[f"{date_field}.gte"] = f"{year_from}-01-01"
+    if year_to:
+        params[f"{date_field}.lte"] = f"{year_to}-12-31"
+    if min_rating:
+        params["vote_average.gte"] = min_rating
+        params["vote_count.gte"] = max(params.get("vote_count.gte", 0), 50)
+    if language:
+        params["with_original_language"] = language
     if sort == "top_rated":
-        params["vote_count.gte"] = 300
+        params["vote_count.gte"] = max(params.get("vote_count.gte", 0), 300)
     if sort == "new":
         from datetime import date
-        params["primary_release_date.lte" if kind == "movie" else "first_air_date.lte"] = date.today().isoformat()
-        params["vote_count.gte"] = 20
+        today = date.today().isoformat()
+        params[f"{date_field}.lte"] = min(today, params.get(f"{date_field}.lte", today))
+        params["vote_count.gte"] = max(params.get("vote_count.gte", 0), 20)
     body = await _get(f"/discover/{_tv(kind)}", params)
     return {"results": _results(body, _tv(kind)), "page": body.get("page") or page,
             "totalPages": min(body.get("total_pages") or 1, 500)}
