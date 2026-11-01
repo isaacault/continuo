@@ -379,3 +379,17 @@ def test_a_copy_with_few_real_sources_is_swapped_once(vclient, fake):
     assert fake.body(fake.called("POST", f"{RADARR}/release")[0])["guid"].endswith("LAMA[TGx]"), "not the thin one again"
     vclient.get(f"/v1/video/play-now/{rid}", headers=bearer(s))
     assert len(fake.called("POST", f"{RADARR}/release")) == 1, "swapped once, not every look"
+
+
+def test_with_a_play_now_tag_continuo_tags_and_leaves_the_switching_alone(vclient, fake):
+    """The homelab's watchnow turns sequential mode off on any torrent without its tag."""
+    from continuo.video.upstream import qbittorrent
+    config.reload(dict(os.environ, QBITTORRENT_URL="http://qbt.test", QBITTORRENT_PLAY_NOW_TAG="watchnow"))
+    fake.on("POST", f"{QBT}/torrents/addTags", {})
+    fake.on("POST", f"{QBT}/torrents/toggleSequentialDownload", {})
+    run(qbittorrent.stream_mode(HASH, {"seq_dl": False, "f_l_piece_prio": False, "tags": "movies-extra"}))
+    sent = fake.called("POST", f"{QBT}/torrents/addTags")[0].content.decode()
+    assert "tags=watchnow" in sent and HASH.lower() in sent
+    assert not fake.called("POST", f"{QBT}/torrents/toggleSequentialDownload"), "the tag's owner switches it, not continuo"
+    run(qbittorrent.stream_mode(HASH, {"seq_dl": True, "f_l_piece_prio": True, "tags": "movies-extra, watchnow"}))
+    assert len(fake.called("POST", f"{QBT}/torrents/addTags")) == 1, "tagged once"

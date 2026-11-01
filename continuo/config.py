@@ -99,6 +99,10 @@ class Settings:
     qbittorrent_username: str = ""
     qbittorrent_password: str = ""
     video_downloads_dir: str = "/data/downloads"
+    # A qBittorrent tag that hands a Play now download to another tool that owns in-order downloading
+    # (the homelab's watchnow switches sequential mode OFF on any torrent without its tag). Set, continuo
+    # tags the torrent and leaves the switching to that tool; unset, continuo switches it itself.
+    qbittorrent_play_now_tag: str = ""
     qbittorrent_downloads_dir: str = "/data/downloads"
 
     # --- Navidrome ---
@@ -298,6 +302,7 @@ def load(env: dict | None = None) -> Settings:
         qbittorrent_username=_str(e, "QBITTORRENT_USERNAME"),
         qbittorrent_password=_str(e, "QBITTORRENT_PASSWORD"),
         video_downloads_dir=_url(e, "VIDEO_DOWNLOADS_DIR", "/data/downloads"),
+        qbittorrent_play_now_tag=_str(e, "QBITTORRENT_PLAY_NOW_TAG"),
         qbittorrent_downloads_dir=_url(e, "QBITTORRENT_DOWNLOADS_DIR", "/data/downloads"),
         navidrome_url=_url(e, "NAVIDROME_URL", "http://localhost:4533"),
         navidrome_music_root=_url(e, "NAVIDROME_MUSIC_ROOT", "/music"),
