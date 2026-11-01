@@ -142,3 +142,72 @@ def test_qbittorrent_signs_in_when_asked(vclient, fake):
     assert run(qbittorrent.torrent(HASH)) is None
     sent = fake.called("POST", f"{QBT}/auth/login")[0].content.decode()
     assert state["in"] is True and "username=admin" in sent and "password=pw" in sent
+
+
+SONARR = "http://sonarr.test/api/v3"
+
+
+def test_which_episode_a_file_is():
+    from continuo.video.playnow import episode_in_name
+    assert episode_in_name("Show.S01E02.1080p.mkv") == (1, 2)
+    assert episode_in_name("Show/Season 1/show.s1e10.mkv") == (1, 10)
+    assert episode_in_name("Show - 2x07 - Title.mp4") == (2, 7)
+    assert episode_in_name("Show.S01E02E03.mkv") == (1, 2)
+    assert episode_in_name("Show.1080p.x264.mkv") is None
+    assert episode_in_name("Film.2025.mkv") is None
+
+
+def test_an_episode_in_a_season_pack(vclient):
+    from continuo.video.playnow import pick_file
+    t = {"piece_size": PIECE, "save_path": "/data/downloads"}
+    files = [{"index": 0, "name": "Show.S01/Show.S01E01.mkv", "size": 5000}, {"index": 1, "name": "Show.S01/Show.S01E02.mkv", "size": 6000},
+             {"index": 2, "name": "Show.S01/Show.S01E03.mkv", "size": 7000}]
+    lay = pick_file(t, files, (1, 2))
+    assert (lay.name, lay.offset, lay.size) == ("Show.S01/Show.S01E02.mkv", 5000, 6000)
+    assert pick_file(t, files, (1, 9)) is None, "not in this pack"
+    assert pick_file(t, [{"index": 0, "name": "show.ep.mkv", "size": 9000}, {"index": 1, "name": "sample.mkv", "size": 100}], (1, 4)).name == "show.ep.mkv", \
+        "the only real video, whatever its name"
+
+
+def test_play_now_for_an_episode(vclient, fake, monkeypatch):
+    from continuo.video import db, playnow
+    monkeypatch.setattr(playnow, "READY_MIN_BYTES", 2 * PIECE)
+    config.reload(dict(os.environ, **{k: v for k, v in dict(CONTINUO_MODULES="music,video", JELLYFIN_URL="http://jellyfin.test",
+        JELLYFIN_API_KEY="jf", SONARR_URL="http://sonarr.test", SONARR_API_KEY="so", QBITTORRENT_URL="http://qbt.test",
+        VIDEO_DOWNLOADS_DIR=str(vclient.downloads), QBITTORRENT_DOWNLOADS_DIR="/data/downloads", PUBLIC_BASE_URL="https://api.example").items()}))
+    make_user()
+    s = login(vclient)
+    req = db.create(kind="series", tmdb_id=1396, title="Show", year=2008, poster_path=None, user_id=1, seasons=[1])
+    db.update(req["id"], status="downloading", sonarr_series_id=5)
+    pack = vclient.downloads / "incomplete" / "Show.S01"
+    pack.mkdir()
+    e1, e2 = bytes(range(256)) * 12, bytes(reversed(range(256))) * 16          # 3072 and 4096 bytes
+    (pack / "Show.S01E01.mkv").write_bytes(e1)
+    (pack / "Show.S01E02.mkv").write_bytes(e2)
+    fake.on("GET", f"{SONARR}/queue/details", [{"downloadId": HASH, "protocol": "torrent", "episode": {"seasonNumber": 1, "episodeNumber": 1}},
+                                               {"downloadId": HASH, "protocol": "torrent", "episode": {"seasonNumber": 1, "episodeNumber": 2}}])
+    fake.on("GET", f"{QBT}/torrents/info", [{"hash": HASH.lower(), "piece_size": PIECE, "seq_dl": True, "f_l_piece_prio": True,
+                                             "save_path": "/data/downloads", "download_path": "/data/downloads/incomplete"}])
+    fake.on("GET", f"{QBT}/torrents/files", [{"index": 0, "name": "Show.S01/Show.S01E01.mkv", "size": len(e1)},
+                                             {"index": 1, "name": "Show.S01/Show.S01E02.mkv", "size": len(e2)}])
+    fake.on("GET", f"{QBT}/torrents/pieceStates", [2] * 7)                    # all 7 KiB here
+    st = vclient.get(f"/v1/video/play-now/{req['id']}", params={"season": 1, "episode": 2}, headers=bearer(s)).json()
+    assert st["state"] == "ready" and "&s=1&e=2&" in st["streamUrl"]
+    assert fake.called("GET", f"{SONARR}/queue/details")[0].url.params["includeEpisode"] == "true"
+    url = st["streamUrl"].replace("https://api.example", "")
+    assert vclient.get(url, headers={"Range": "bytes=0-"}).content == e2, "episode 2, not the pack's first file"
+    assert vclient.get(url.replace("&e=2&", "&e=1&")).status_code == 403, "the link is for that episode only"
+    assert vclient.post("/v1/video/play-now", json={"tmdbId": 1396, "kind": "series"}, headers=bearer(s)).status_code == 400
+
+
+def test_play_now_for_another_season_widens_the_request(vclient, fake):
+    from continuo.video import db, playnow_api
+    config.reload(dict(os.environ, CONTINUO_MODULES="music,video", SONARR_URL="http://sonarr.test", SONARR_API_KEY="so", TMDB_API_KEY="tm"))
+    req = db.create(kind="series", tmdb_id=1396, title="Show", year=2008, poster_path=None, user_id=None, seasons=[1])
+    fake.on("GET", f"{TMDB}/tv/1396", {"id": 1396, "name": "Show", "external_ids": {"tvdb_id": 81189}})
+    fake.on("GET", f"{SONARR}/series", [{"id": 5, "tvdbId": 81189, "seasons": [{"seasonNumber": 1, "monitored": True}, {"seasonNumber": 2, "monitored": False}]}])
+    fake.on("PUT", f"{SONARR}/series/5", handler=lambda r: fake.body(r))
+    fake.on("POST", f"{SONARR}/command", {"id": 1})
+    run(playnow_api._ensure_season(req["id"], 2))
+    assert db.get(req["id"])["seasons"] == "[1, 2]"
+    assert [fake.body(c)["seasonNumber"] for c in fake.called("POST", f"{SONARR}/command")] == [2]

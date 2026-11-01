@@ -1,4 +1,4 @@
-"""Play now for films: watch while it downloads (docs/design/video.md §9). The request goes to
+"""Play now for films and episodes: watch while it downloads (docs/design/video.md §9). The request goes to
 Radarr as any other; once Radarr has handed a release to qBittorrent, the torrent is switched to
 download in order, and the film's file is served as far as it has arrived, contiguously, through a
 link signed for this account (a <video> can't send a token). When Radarr has imported it and
@@ -7,13 +7,14 @@ import asyncio
 import hashlib
 import hmac
 import os
+import re
 import time
 
 import httpx
 
 from .. import config
 from . import index
-from .upstream import qbittorrent, radarr
+from .upstream import qbittorrent, radarr, sonarr
 
 LINK_SECONDS = 12 * 3600
 # Ready to start: this much of the start in hand (and, for an MP4, its end: the index lives there).
@@ -28,13 +29,31 @@ MIME = {".mkv": "video/x-matroska", ".mp4": "video/mp4", ".m4v": "video/mp4", ".
         ".webm": "video/webm", ".avi": "video/x-msvideo", ".ts": "video/mp2t"}
 
 
-def signature(request_id: int, user_id: int, expires: int) -> str:
-    msg = f"play-now-video|{request_id}|{user_id}|{expires}".encode()
+# An episode: (season, number). A film: None.
+Ep = tuple[int, int] | None
+
+
+def signature(request_id: int, user_id: int, expires: int, ep: Ep = None) -> str:
+    s, e = ep or (0, 0)
+    msg = f"play-now-video|{request_id}|{user_id}|{expires}|{s}|{e}".encode()
     return hmac.new(config.settings.jwt_secret.encode(), msg, hashlib.sha256).hexdigest()
 
 
-def verify(request_id: int, user_id: int, expires: int, sig: str) -> bool:
-    return expires >= int(time.time()) and hmac.compare_digest(signature(request_id, user_id, expires), sig)
+def verify(request_id: int, user_id: int, expires: int, sig: str, ep: Ep = None) -> bool:
+    return expires >= int(time.time()) and hmac.compare_digest(signature(request_id, user_id, expires, ep), sig)
+
+
+_EPISODE_NAMES = (re.compile(r"[Ss](\d{1,2})[ ._-]?[Ee](\d{1,3})(?!\d)"), re.compile(r"(?<!\d)(\d{1,2})x(\d{2,3})(?!\d)"))
+
+
+def episode_in_name(name: str) -> tuple[int, int] | None:
+    """S01E02, s1e2, 1x02: which episode a file is, by its name (the folder's too)."""
+    for pattern in _EPISODE_NAMES:
+        found = pattern.findall(os.path.basename(name)) or pattern.findall(name)
+        if found:
+            s, e = found[-1]
+            return int(s), int(e)
+    return None
 
 
 class Layout:
@@ -62,11 +81,19 @@ class Layout:
         return MIME.get(os.path.splitext(self.name)[1].lower(), "application/octet-stream")
 
 
-def pick_file(torrent: dict, files: list[dict]) -> Layout | None:
-    """The film in a torrent: its biggest video file (samples and extras are smaller)."""
+def pick_file(torrent: dict, files: list[dict], ep: Ep = None) -> Layout | None:
+    """The film in a torrent: its biggest video file (samples and extras are smaller). An episode:
+    the file named for it (a season pack holds many), or the only video when there's one."""
     videos = [f for f in files if f.get("name", "").lower().endswith(qbittorrent.VIDEO_EXTENSIONS)]
     if not videos or not torrent.get("piece_size"):
         return None
+    if ep is not None:
+        named = [f for f in videos if episode_in_name(f["name"]) == ep]
+        biggest = max(videos, key=lambda x: x.get("size") or 0)
+        lone = len([f for f in videos if (f.get("size") or 0) > (biggest.get("size") or 0) * 0.2]) == 1
+        videos = named or ([biggest] if lone else [])
+        if not videos:
+            return None
     f = max(videos, key=lambda x: x.get("size") or 0)
     by_index = sorted(files, key=lambda x: x.get("index", 0))
     offset = sum(x.get("size") or 0 for x in by_index if x.get("index", 0) < f.get("index", 0))
@@ -90,35 +117,61 @@ def local_path(torrent: dict, name: str) -> str:
     return ""
 
 
-async def find_download(req: dict) -> str | None:
-    """The torrent Radarr handed over for this request (its hash), once it has."""
-    if not req.get("radarr_movie_id"):
-        return None
-    for q in await radarr.queue_for(req["radarr_movie_id"]):
+async def find_download(req: dict, ep: Ep = None) -> str | None:
+    """The torrent Radarr (a film) or Sonarr (the episode, alone or in a season pack) handed over for
+    this request (its hash), once it has."""
+    if ep is None:
+        if not req.get("radarr_movie_id"):
+            return None
+        queue = await radarr.queue_for(req["radarr_movie_id"])
+    else:
+        if not req.get("sonarr_series_id"):
+            return None
+        queue = [q for q in await sonarr.queue_for(req["sonarr_series_id"])
+                 if ((q.get("episode") or {}).get("seasonNumber"), (q.get("episode") or {}).get("episodeNumber")) == ep]
+    for q in queue:
         if q.get("downloadId") and (q.get("protocol") in (None, "torrent")):
             return q["downloadId"].lower()
     return None
 
 
-async def status(req: dict) -> dict:
+async def in_library(req: dict, ep: Ep = None) -> str | None:
+    """Jellyfin's ID for the film, or the episode, once the library has it."""
+    if ep is None:
+        item = index.by_tmdb("movie", req["tmdb_id"])
+        return item["jellyfin_id"] if item else None
+    show = index.by_tmdb("series", req["tmdb_id"])
+    if not show:
+        return None
+    from .upstream import jellyfin
+    try:
+        for e in await jellyfin.episodes(show["jellyfin_id"], season=ep[0]):
+            if (e["season"], e["episode"]) == ep:
+                return e["jellyfinId"]
+    except httpx.HTTPError:
+        pass
+    return None
+
+
+async def status(req: dict, ep: Ep = None) -> dict:
     """Where Play now stands: searching, downloading (how much is in hand), ready to play, in the
     library (with its Jellyfin ID), or failed."""
-    item = index.by_tmdb("movie", req["tmdb_id"])
-    if item:
-        return {"state": "available", "jellyfinId": item["jellyfin_id"]}
+    jellyfin_id = await in_library(req, ep)
+    if jellyfin_id:
+        return {"state": "available", "jellyfinId": jellyfin_id}
     if req["status"] == "failed":
         return {"state": "failed", "error": req.get("error")}
     if not qbittorrent.configured():
         return {"state": "unsupported", "error": "This server can't play films while they download (no qBittorrent set up)."}
     try:
-        hash_ = await find_download(req)
+        hash_ = await find_download(req, ep)
         if not hash_:
             return {"state": "searching"}
         t = await qbittorrent.torrent(hash_)
         if not t:
             return {"state": "searching"}
         await qbittorrent.stream_mode(hash_, t)
-        layout = pick_file(t, await qbittorrent.files(hash_))
+        layout = pick_file(t, await qbittorrent.files(hash_), ep)
         if not layout:
             return {"state": "downloading", "progress": t.get("progress") or 0, "note": "Waiting for the file list."}
         states = await qbittorrent.piece_states(hash_)
@@ -135,12 +188,12 @@ async def status(req: dict) -> dict:
             "onDisk": bool(layout.path)}
 
 
-async def available(req: dict, start: int) -> tuple[Layout, int]:
-    """The film's layout and how far from [start] can be served now, waiting a while for a jump
+async def available(req: dict, start: int, ep: Ep = None) -> tuple[Layout, int]:
+    """The file's layout and how far from [start] can be served now, waiting a while for a jump
     ahead. Raises LookupError when there's no file yet, TimeoutError when it doesn't arrive."""
-    hash_ = await find_download(req)
+    hash_ = await find_download(req, ep)
     t = await qbittorrent.torrent(hash_) if hash_ else None
-    layout = pick_file(t, await qbittorrent.files(hash_)) if t else None
+    layout = pick_file(t, await qbittorrent.files(hash_), ep) if t else None
     if not layout or not layout.path:
         raise LookupError("No file to play yet.")
     if start >= layout.size:

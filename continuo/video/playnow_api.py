@@ -1,8 +1,11 @@
-"""Play now for films, over HTTP: start it, follow it, and the film's bytes as they arrive."""
+"""Play now for films and episodes, over HTTP: start it, follow it, and the bytes as they arrive."""
+import asyncio
+import json
 import os
 import re
 import time
 
+import httpx
 from fastapi import APIRouter, Depends, Path, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -11,63 +14,104 @@ from starlette.concurrency import run_in_threadpool
 from .. import config
 from ..auth.deps import CurrentUser, require_user
 from ..errors import ApiError
-from . import db, index, playnow
+from . import db, playnow
 
 router = APIRouter(prefix="/v1/video/play-now", tags=["video"])
 _RANGE = re.compile(r"bytes=(\d*)-(\d*)")
 
 
+_tasks: set[asyncio.Task] = set()
+
+
 class PlayNowIn(BaseModel):
     tmdbId: int
+    kind: str = "movie"
+    # An episode: which one (a series is requested by season; Sonarr fetches the season).
+    season: int | None = None
+    episode: int | None = None
+
+
+def _ep(kind: str, season: int | None, episode: int | None) -> playnow.Ep:
+    if kind == "movie":
+        return None
+    if kind != "series" or season is None or episode is None or season < 1 or episode < 1:
+        raise ApiError(400, "bad_episode", "Play now for a series needs a season and an episode.")
+    return (season, episode)
 
 
 @router.post("")
 async def start(body: PlayNowIn, user: CurrentUser = Depends(require_user)) -> dict:
-    """A film not in the library, wanted now: requested (or the request already on its way), and
+    """A film or an episode not in the library, wanted now: requested (a series: its season), and
     played as it downloads once enough has come. One in the library just plays."""
-    item = index.by_tmdb("movie", body.tmdbId)
-    if item:
-        return {"state": "available", "jellyfinId": item["jellyfin_id"], "requestId": None}
+    ep = _ep(body.kind, body.season, body.episode)
+    jellyfin_id = await playnow.in_library({"tmdb_id": body.tmdbId}, ep)
+    if jellyfin_id:
+        return {"state": "available", "jellyfinId": jellyfin_id, "requestId": None}
     from .api import RequestIn, create_request
-    out = await create_request(RequestIn(kind="movie", tmdbId=body.tmdbId), user)
+    out = await create_request(RequestIn(kind=body.kind, tmdbId=body.tmdbId, seasons=[ep[0]] if ep else None), user)
+    if ep and not out["created"]:
+        task = asyncio.get_running_loop().create_task(_ensure_season(out["request"]["id"], ep[0]))
+        _tasks.add(task)
+        task.add_done_callback(_tasks.discard)
     return {"state": "searching", "requestId": out["request"]["id"], "created": out["created"]}
 
 
-def _get(request_id: int) -> dict:
+async def _ensure_season(request_id: int, season: int) -> None:
+    """A series already on its way, but not this season: add the season to the request and Sonarr."""
+    from .upstream import sonarr, tmdb
     req = db.get(request_id)
-    if not req or req["kind"] != "movie":
-        raise ApiError(404, "not_found", "No such film request.")
+    asked = json.loads(req["seasons"]) if req and req.get("seasons") else None
+    if req is None or asked is None or season in asked:
+        return
+    db.update(request_id, seasons=json.dumps(sorted({*asked, season})))
+    try:
+        tvdb = ((await tmdb.series(req["tmdb_id"])).get("external_ids") or {}).get("tvdb_id")
+        if tvdb:
+            await sonarr.request(int(tvdb), [season])
+    except (httpx.HTTPError, tmdb.Unavailable):
+        pass
+
+
+def _get(request_id: int, ep: playnow.Ep) -> dict:
+    req = db.get(request_id)
+    if not req or req["kind"] != ("movie" if ep is None else "series"):
+        raise ApiError(404, "not_found", "No such request.")
     return req
 
 
 @router.get("/{request_id}")
-async def follow(request_id: int, user: CurrentUser = Depends(require_user)) -> dict:
+async def follow(request_id: int, season: int | None = Query(None, ge=1), episode: int | None = Query(None, ge=1),
+                 user: CurrentUser = Depends(require_user)) -> dict:
     """Where it stands; once ready, a link the player streams from (signed for this account)."""
-    req = _get(request_id)
-    out = await playnow.status(req)
+    ep = (season, episode) if season and episode else None
+    req = _get(request_id, ep)
+    out = await playnow.status(req, ep)
     if out["state"] == "ready":
         expires = int(time.time()) + playnow.LINK_SECONDS
         base = config.settings.public_base_url
-        out["streamUrl"] = (f"{base}/v1/video/play-now/{request_id}/stream?u={user.id}&exp={expires}"
-                            f"&sig={playnow.signature(request_id, user.id, expires)}")
+        which = f"&s={ep[0]}&e={ep[1]}" if ep else ""
+        out["streamUrl"] = (f"{base}/v1/video/play-now/{request_id}/stream?u={user.id}&exp={expires}{which}"
+                            f"&sig={playnow.signature(request_id, user.id, expires, ep)}")
         out["expiresAt"] = expires
     return {"requestId": request_id, "title": req.get("title"), **out}
 
 
 @router.get("/{request_id}/stream")
 async def stream(request: Request, request_id: int = Path(...), u: int = Query(...), exp: int = Query(...),
-                 sig: str = Query(..., pattern="^[0-9a-f]{64}$")) -> StreamingResponse:
-    """The film's file, as far as it has arrived: a range starting past that waits a little for it
-    (the torrent comes in order), then answers 503 so the player tries again."""
-    if not playnow.verify(request_id, u, exp, sig):
+                 sig: str = Query(..., pattern="^[0-9a-f]{64}$"), s: int | None = Query(None, ge=1),
+                 e: int | None = Query(None, ge=1)) -> StreamingResponse:
+    """The file, as far as it has arrived: a range starting past that waits a little for it (the
+    torrent comes in order), then answers 503 so the player tries again."""
+    ep = (s, e) if s and e else None
+    if not playnow.verify(request_id, u, exp, sig, ep):
         raise ApiError(403, "bad_link", "This link has expired or isn't valid.")
-    req = _get(request_id)
+    req = _get(request_id, ep)
     m = _RANGE.fullmatch((request.headers.get("range") or "bytes=0-").strip())
     if not m:
         raise ApiError(416, "bad_range", "Only one byte range, please.")
     start = int(m.group(1) or 0)
     try:
-        layout, available = await playnow.available(req, start)
+        layout, available = await playnow.available(req, start, ep)
     except LookupError as e:
         raise ApiError(409, "not_ready", str(e), True) from e
     except TimeoutError as e:
