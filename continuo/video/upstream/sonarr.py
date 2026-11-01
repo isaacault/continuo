@@ -112,3 +112,8 @@ async def unmonitor_season(series_id: int, season: int) -> None:
     show["seasons"] = [{**x, "monitored": False} if x.get("seasonNumber") == season else x for x in show.get("seasons") or []]
     r = await _client().put(f"/series/{series_id}", json=show)
     r.raise_for_status()
+
+
+async def delete_series(series_id: int) -> None:
+    r = await _client().delete(f"/series/{series_id}", params={"deleteFiles": "true", "addImportListExclusion": "false"})
+    r.raise_for_status()

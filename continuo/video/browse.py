@@ -22,12 +22,57 @@ async def genres(kind: str = Query(..., pattern="^(movie|series)$"), _user: Curr
     return {"kind": kind, "genres": await _tmdb(tmdb.genres(kind))}
 
 
+def may_remove(user: CurrentUser) -> bool:
+    """Who may delete from the library: music's rule too (LIBRARY_REMOVAL_ROLE: admin, or anyone)."""
+    from .. import config
+    return config.settings.library_removal_role != "admin" or user.is_admin
+
+
 @router.get("/settings")
-async def settings(_user: CurrentUser = Depends(require_user)) -> dict:
-    """How the video apps look on this server (an admin's choice) and which Jellyfin libraries are anime."""
+async def settings(user: CurrentUser = Depends(require_user)) -> dict:
+    """How the video apps look on this server (an admin's choice), which Jellyfin libraries are anime,
+    and whether this account may delete from the library."""
     from .. import config
     s = config.settings
-    return {"ui": s.video_ui, "animeLibraries": list(s.video_anime_libraries)}
+    return {"ui": s.video_ui, "animeLibraries": list(s.video_anime_libraries), "canRemove": may_remove(user)}
+
+
+@router.delete("/library/{kind}/{tmdb_id}")
+async def remove_from_library(kind: str = Kind, tmdb_id: int = Path(..., ge=1), user: CurrentUser = Depends(require_user)) -> dict:
+    """Deletes a film or a whole series from the library, files and all. Through Radarr or Sonarr
+    when they have it (so it isn't fetched again), through Jellyfin otherwise; the index forgets it."""
+    from .. import config
+    from . import db, index
+    from .upstream import jellyfin, radarr, sonarr
+    s = config.settings
+    if not may_remove(user):
+        raise ApiError(403, "forbidden", "Only an admin can delete from the library here.")
+    item = index.by_tmdb(kind, tmdb_id)
+    via = None
+    try:
+        if kind == "movie" and s.radarr_api_key:
+            movie = await radarr.find(tmdb_id)
+            if movie:
+                await radarr.delete_movie(movie["id"])
+                via = "radarr"
+        elif kind == "series" and s.sonarr_api_key:
+            tvdb = ((await _tmdb(tmdb.series(tmdb_id))).get("external_ids") or {}).get("tvdb_id")
+            show = await sonarr.find(int(tvdb)) if tvdb else None
+            if show:
+                await sonarr.delete_series(show["id"])
+                via = "sonarr"
+        if via is None:
+            if not item:
+                raise ApiError(404, "not_found", "That isn't in the library.")
+            await jellyfin.delete_item(item["jellyfin_id"])
+            via = "jellyfin"
+    except httpx.HTTPError as e:
+        raise ApiError(502, "upstream_unavailable", "Radarr, Sonarr or Jellyfin didn't answer: nothing was deleted.", True) from e
+    index.forget(kind, tmdb_id)
+    for r in db.for_user(None):
+        if r["kind"] == kind and r["tmdb_id"] == tmdb_id:
+            db.delete(r["id"])
+    return {"removed": True, "via": via}
 
 
 @router.get("/browse")

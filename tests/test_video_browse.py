@@ -171,9 +171,9 @@ def test_home_episodes_name_their_series(vclient, fake):
 def test_settings_say_how_the_apps_look(vclient, fake):
     make_user()
     s = login(vclient)
-    assert vclient.get("/v1/video/settings", headers=bearer(s)).json() == {"ui": "library", "animeLibraries": ["Anime"]}
+    assert vclient.get("/v1/video/settings", headers=bearer(s)).json() == {"ui": "library", "animeLibraries": ["Anime"], "canRemove": True}
     config.reload(dict(os.environ, CONTINUO_MODULES="music,video", VIDEO_UI="netflix", VIDEO_ANIME_LIBRARIES="Anime, Anime films"))
-    assert vclient.get("/v1/video/settings", headers=bearer(s)).json() == {"ui": "netflix", "animeLibraries": ["Anime", "Anime films"]}
+    assert vclient.get("/v1/video/settings", headers=bearer(s)).json() == {"ui": "netflix", "animeLibraries": ["Anime", "Anime films"], "canRemove": True}
     config.reload(dict(os.environ, CONTINUO_MODULES="music,video", VIDEO_UI="something-else"))
     assert vclient.get("/v1/video/settings", headers=bearer(s)).json()["ui"] == "library", "anything else: the default"
 
@@ -190,3 +190,42 @@ def test_explore_filters_anime_years_rating_language(vclient, fake):
     assert (p["first_air_date.gte"], p["first_air_date.lte"]) == ("2010-01-01", "2019-12-31"), "a range in the past stays in the past"
     assert (p["vote_average.gte"], p["vote_count.gte"]) == ("7.5", "50")
     assert vclient.get("/v1/video/browse", params={"kind": "movie", "language": "japanese"}, headers=bearer(s)).status_code == 422
+
+
+
+RADARR = "http://radarr.test/api/v3"
+SONARR = "http://sonarr.test/api/v3"
+
+
+def test_removing_from_the_library(vclient, fake):
+    from continuo.db import users
+    from continuo.video import index
+    config.reload(dict(os.environ, CONTINUO_MODULES="music,video", JELLYFIN_URL=JELLYFIN, JELLYFIN_API_KEY="jf", TMDB_API_KEY="tm",
+                       RADARR_URL="http://radarr.test", RADARR_API_KEY="rd", SONARR_URL="http://sonarr.test", SONARR_API_KEY="so"))
+    _library(fake, [{"Id": "jf-603", "Name": "The Matrix", "Type": "Movie", "ProviderIds": {"Tmdb": "603"}},
+                    {"Id": "jf-bb", "Name": "Breaking Bad", "Type": "Series", "ProviderIds": {"Tmdb": "1396"}},
+                    {"Id": "jf-home", "Name": "Home video", "Type": "Movie", "ProviderIds": {"Tmdb": "999"}}])
+    make_user(role="user")
+    s = login(vclient)
+    assert vclient.get("/v1/video/settings", headers=bearer(s)).json()["canRemove"] is False
+    assert vclient.delete("/v1/video/library/movie/603", headers=bearer(s)).status_code == 403, "admins only, as music's"
+    users.set_role(users.get("isaac")["id"], "admin")
+    s = login(vclient)
+    assert vclient.get("/v1/video/settings", headers=bearer(s)).json()["canRemove"] is True
+    # a film Radarr has: through Radarr, files and all
+    fake.on("GET", f"{RADARR}/movie", [{"id": 7, "tmdbId": 603}])
+    fake.on("DELETE", f"{RADARR}/movie/7", {})
+    assert vclient.delete("/v1/video/library/movie/603", headers=bearer(s)).json() == {"removed": True, "via": "radarr"}
+    assert fake.called("DELETE", f"{RADARR}/movie/7")[0].url.params["deleteFiles"] == "true"
+    assert index.by_tmdb("movie", 603) is None
+    # a series Sonarr has
+    fake.on("GET", f"{TMDB}/tv/1396", BB | {"external_ids": {"tvdb_id": 81189}})
+    fake.on("GET", f"{SONARR}/series", [{"id": 5, "tvdbId": 81189}])
+    fake.on("DELETE", f"{SONARR}/series/5", {})
+    assert vclient.delete("/v1/video/library/series/1396", headers=bearer(s)).json()["via"] == "sonarr"
+    assert fake.called("DELETE", f"{SONARR}/series/5")[0].url.params["deleteFiles"] == "true"
+    # a film nobody manages: Jellyfin deletes it
+    fake.on("GET", f"{RADARR}/movie", [])
+    fake.on("DELETE", f"{JELLYFIN}/Items/jf-home", handler=lambda r: httpx.Response(204))
+    assert vclient.delete("/v1/video/library/movie/999", headers=bearer(s)).json()["via"] == "jellyfin"
+    assert vclient.delete("/v1/video/library/movie/12345", headers=bearer(s)).status_code == 404
