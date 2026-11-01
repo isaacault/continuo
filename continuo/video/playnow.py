@@ -181,7 +181,10 @@ async def status(req: dict, ep: Ep = None) -> dict:
     need = min(layout.size, max(READY_MIN_BYTES, int(layout.size * READY_FRACTION)))
     tail_ok = layout.mime != "video/mp4" or layout.tail_in(states)
     ready = have >= need and tail_ok and bool(layout.path)
-    return {"state": "ready" if ready else "downloading", "progress": t.get("progress") or 0,
+    # Slower than it plays (a two-hour film assumed), a minute in: worth a faster copy.
+    playback_rate = layout.size / (2 * 3600)
+    too_slow = (t.get("time_active") or 0) > 60 and (t.get("progress") or 0) < 0.95 and (t.get("dlspeed") or 0) < playback_rate * 1.1
+    return {"state": "ready" if ready else "downloading", "progress": t.get("progress") or 0, "tooSlow": too_slow,
             "contiguousBytes": have, "neededBytes": need, "sizeBytes": layout.size,
             "downloadSpeed": t.get("dlspeed") or 0, "seeds": t.get("num_seeds") or 0, "etaSeconds": t.get("eta"),
             "container": os.path.splitext(layout.name)[1].lstrip(".").lower(), "mime": layout.mime,
@@ -227,3 +230,73 @@ async def available(req: dict, start: int, ep: Ep = None) -> tuple[Layout, int]:
             raise TimeoutError("That part hasn't downloaded yet.")
         await asyncio.sleep(1)
 
+
+
+# --- the release to stream: Play now picks it, rather than Radarr's best-quality choice ------------
+
+# Radarr's own objections that don't matter for Play now (one already in the queue, say).
+_SOFT_REJECTIONS = ("already meets cutoff", "in queue", "is not an upgrade", "existing file")
+_HDR = re.compile(r"\b(dv|dovi|dolby[ ._-]?vision|hdr10\+?|hdr)\b", re.I)
+_H264 = re.compile(r"\b(x264|h[ ._]?264|avc)\b", re.I)
+_HEVC = re.compile(r"\b(x265|h[ ._]?265|hevc)\b", re.I)
+MIN_SEEDERS = 5
+MAX_MBPS = 12.0
+
+
+def streamable(release: dict, runtime_minutes: int | None) -> float | None:
+    """How good a release is to watch while it downloads, or None when it isn't one: a torrent at
+    1080p (720p will do), not 4K, a remux or HDR (for SDR screens and browsers), with enough
+    sources, at a bitrate a home connection keeps up with. Most sources wins; H.264 (any browser
+    plays it) and 3-8 Mbit/s are preferred."""
+    if release.get("protocol") != "torrent":
+        return None
+    title = release.get("title") or ""
+    rejections = [x for x in release.get("rejections") or [] if not any(s in x.lower() for s in _SOFT_REJECTIONS)]
+    if rejections:
+        return None
+    quality = ((release.get("quality") or {}).get("quality") or {})
+    resolution = quality.get("resolution") or 0
+    if resolution not in (720, 1080) or "remux" in (quality.get("name") or "").lower() or _HDR.search(title):
+        return None
+    seeders = release.get("seeders") or 0
+    if seeders < MIN_SEEDERS:
+        return None
+    mbps = (release.get("size") or 0) * 8 / ((runtime_minutes or 120) * 60) / 1e6
+    if not 0.8 <= mbps <= MAX_MBPS:
+        return None
+    score = min(seeders, 150) ** 0.5               # past ~150 sources a home connection is full anyway
+    score += 6 if resolution == 1080 else 0
+    score += 4 if _H264.search(title) else 1 if _HEVC.search(title) else 0
+    score += 3 if 2.5 <= mbps <= 8 else 0
+    return score
+
+
+def best_release(found: list[dict], runtime_minutes: int | None) -> dict | None:
+    scored = [(streamable(r, runtime_minutes), r) for r in found]
+    scored = [(s, r) for s, r in scored if s is not None]
+    return max(scored, key=lambda x: x[0])[1] if scored else None
+
+
+async def pick_and_grab(movie: dict) -> dict | None:
+    """Grabs the best release to stream for a film in Radarr; None when there isn't one."""
+    chosen = best_release(await radarr.releases(movie["id"]), movie.get("runtime"))
+    if chosen:
+        await radarr.grab(chosen)
+    return chosen
+
+
+async def find_faster(req: dict) -> dict | None:
+    """The download is too slow to watch: drop it (blocklisted) for the best release to stream."""
+    movie_id = req.get("radarr_movie_id")
+    if not movie_id:
+        return None
+    movie = (await radarr._client().get(f"/movie/{movie_id}")).json()
+    chosen = best_release(await radarr.releases(movie_id), movie.get("runtime"))
+    if not chosen:
+        return None
+    for q in await radarr.queue_for(movie_id):
+        if q.get("title") != chosen.get("title"):
+            await radarr.drop_download(q["id"])
+    _layouts.pop((req["id"], None), None)
+    await radarr.grab(chosen)
+    return chosen

@@ -47,8 +47,9 @@ async def start(body: PlayNowIn, user: CurrentUser = Depends(require_user)) -> d
     jellyfin_id = await playnow.in_library({"tmdb_id": body.tmdbId}, ep)
     if jellyfin_id:
         return {"state": "available", "jellyfinId": jellyfin_id, "requestId": None}
-    from .api import RequestIn, create_request
-    out = await create_request(RequestIn(kind=body.kind, tmdbId=body.tmdbId, seasons=[ep[0]] if ep else None), user)
+    from .api import RequestIn, request_title
+    out = await request_title(RequestIn(kind=body.kind, tmdbId=body.tmdbId, seasons=[ep[0]] if ep else None), user,
+                              play_now=ep is None)
     if ep and not out["created"]:
         task = asyncio.get_running_loop().create_task(_ensure_season(out["request"]["id"], ep[0]))
         _tasks.add(task)
@@ -137,3 +138,17 @@ async def stream(request: Request, request_id: int = Path(...), u: int = Query(.
                "Content-Length": str(end - start), "Cache-Control": "no-store",
                "Content-Disposition": f'inline; filename="{os.path.basename(layout.name)}"'}
     return StreamingResponse(body(), status_code=206, media_type=layout.mime, headers=headers)
+
+
+@router.post("/{request_id}/faster")
+async def faster(request_id: int, _user: CurrentUser = Depends(require_user)) -> dict:
+    """The film is coming too slowly to watch: swap its download for the best release to stream
+    (the slow one blocklisted)."""
+    req = _get(request_id, None)
+    try:
+        chosen = await playnow.find_faster(req)
+    except httpx.HTTPError as e:
+        raise ApiError(502, "radarr_unavailable", "Radarr isn't answering.", True) from e
+    if not chosen:
+        raise ApiError(404, "nothing_faster", "There's no better-seeded copy to stream right now.")
+    return {"title": chosen.get("title"), "seeders": chosen.get("seeders"), "sizeBytes": chosen.get("size")}

@@ -286,6 +286,11 @@ async def list_requests(user: CurrentUser = Depends(require_user)) -> dict:
 
 @router.post("/requests", status_code=201)
 async def create_request(body: RequestIn, user: CurrentUser = Depends(require_user)) -> dict:
+    return await request_title(body, user)
+
+
+async def request_title(body: RequestIn, user: CurrentUser, play_now: bool = False) -> dict:
+    """A request, or the one already on its way. Play now (a film) picks its own release to stream."""
     if body.kind not in ("movie", "series"):
         raise ApiError(400, "unsupported_kind", "Films (movie) and series can be requested.")
     if body.kind == "movie" and index.by_tmdb("movie", body.tmdbId):
@@ -305,7 +310,7 @@ async def create_request(body: RequestIn, user: CurrentUser = Depends(require_us
     req = db.create(kind=body.kind, tmdb_id=body.tmdbId, title=title, year=year, poster_path=poster, user_id=user.id,
                     seasons=sorted(set(body.seasons)) if body.kind == "series" and body.seasons else None)
     from . import requests as pipeline
-    task = asyncio.get_running_loop().create_task(pipeline.start(req["id"]))
+    task = asyncio.get_running_loop().create_task(pipeline.start(req["id"], play_now=play_now))
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
     return {"request": _request_out(req), "created": True}
