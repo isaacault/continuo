@@ -14,7 +14,7 @@ import time
 import httpx
 
 from .. import config
-from . import index
+from . import db, index
 from .upstream import qbittorrent, radarr, sonarr
 
 log = logging.getLogger("continuo")
@@ -238,6 +238,8 @@ async def available(req: dict, start: int, ep: Ep = None) -> tuple[Layout, int]:
     # While it's being watched, keep it downloading in order (it has been found switched back off).
     if time.monotonic() - _mode_checked.get(hash_, 0) > MODE_RECHECK_SECONDS:
         _mode_checked[hash_] = time.monotonic()
+        if req.get("status") in db.ACTIVE:
+            mark_latest(req["id"], ep)                 # being watched: it's the latest
         t = await qbittorrent.torrent(hash_)
         if t:
             await qbittorrent.stream_mode(hash_, t)
@@ -343,3 +345,72 @@ async def find_faster(req: dict) -> dict | None:
     _layouts.pop((req["id"], None), None)
     await radarr.grab(chosen)
     return chosen
+
+
+
+# --- the latest Play now first; stopping one -----------------------------------------------------
+
+def mark_latest(request_id: int, ep: Ep = None) -> None:
+    """Started or being watched now: this one gets the bandwidth (rebalance)."""
+    from ..db.conn import now
+    fields = {"play_now_at": now()}
+    if ep is not None:
+        fields.update(play_now_season=ep[0], play_now_episode=ep[1])
+    db.update(request_id, **fields)
+
+
+def _ep_of(req: dict) -> Ep:
+    if req["kind"] == "series" and req.get("play_now_season") and req.get("play_now_episode"):
+        return (req["play_now_season"], req["play_now_episode"])
+    return None
+
+
+async def rebalance() -> None:
+    """The latest Play now downloads at full speed, in order, top of the queue; older ones, still on
+    their way, carry on slowly into the library (they were asked for)."""
+    if not qbittorrent.configured():
+        return
+    active = sorted((r for r in db.active() if r.get("play_now_at")), key=lambda r: r["play_now_at"], reverse=True)
+    latest_hash = None
+    for req in active:
+        try:
+            hash_ = await find_download(req, _ep_of(req))
+            t = await qbittorrent.torrent(hash_) if hash_ else None
+            if not t or (t.get("progress") or 0) >= 1:
+                continue
+            if latest_hash is None:
+                latest_hash = hash_
+                await qbittorrent.promote(hash_, t)
+            elif hash_ != latest_hash:                      # a season pack can serve two Play nows
+                await qbittorrent.demote(hash_, t)
+        except httpx.HTTPError as e:
+            log.warning("play now %s: couldn't set its priority: %s", req["id"], e)
+
+
+async def stop(req: dict, ep: Ep = None) -> None:
+    """Not wanted after all: the download stopped and what it had deleted. A film Radarr has no file
+    for goes from Radarr too; for an episode, its season stops being wanted in Sonarr."""
+    _layouts.pop((req["id"], ep), None)
+    if req["kind"] == "movie":
+        movie_id = req.get("radarr_movie_id")
+        if movie_id:
+            for q in await radarr.queue_for(movie_id):
+                await radarr.remove_download(q["id"])
+            if not (await radarr.movie(movie_id)).get("hasFile"):
+                await radarr.delete_movie(movie_id)
+        db.delete(req["id"])
+        return
+    import json
+    season = ep[0] if ep else req.get("play_now_season")
+    series_id = req.get("sonarr_series_id")
+    if series_id and season:
+        for q in await sonarr.queue_for(series_id):
+            if (q.get("episode") or {}).get("seasonNumber") == season or q.get("seasonNumber") == season:
+                await sonarr.remove_download(q["id"])
+        await sonarr.unmonitor_season(series_id, season)
+    asked = json.loads(req["seasons"]) if req.get("seasons") else None
+    left = [s for s in asked if s != season] if asked else []
+    if left:
+        db.update(req["id"], seasons=json.dumps(left), play_now_at=None, play_now_season=None, play_now_episode=None)
+    else:
+        db.delete(req["id"])

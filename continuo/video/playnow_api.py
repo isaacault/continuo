@@ -50,6 +50,7 @@ async def start(body: PlayNowIn, user: CurrentUser = Depends(require_user)) -> d
     from .api import RequestIn, request_title
     out = await request_title(RequestIn(kind=body.kind, tmdbId=body.tmdbId, seasons=[ep[0]] if ep else None), user,
                               play_now=ep is None)
+    playnow.mark_latest(out["request"]["id"], ep)
     if ep and not out["created"]:
         task = asyncio.get_running_loop().create_task(_ensure_season(out["request"]["id"], ep[0]))
         _tasks.add(task)
@@ -86,6 +87,8 @@ async def follow(request_id: int, season: int | None = Query(None, ge=1), episod
     """Where it stands; once ready, a link the player streams from (signed for this account)."""
     ep = (season, episode) if season and episode else None
     req = _get(request_id, ep)
+    if req["status"] in db.ACTIVE:
+        playnow.mark_latest(request_id, ep)            # being looked at: it's the latest
     out = await playnow.status(req, ep)
     if out["state"] == "ready":
         expires = int(time.time()) + playnow.LINK_SECONDS
@@ -152,3 +155,20 @@ async def faster(request_id: int, _user: CurrentUser = Depends(require_user)) ->
     if not chosen:
         raise ApiError(404, "nothing_faster", "There's no better-seeded copy to stream right now.")
     return {"title": chosen.get("title"), "seeders": chosen.get("seeders"), "sizeBytes": chosen.get("size")}
+
+
+@router.post("/{request_id}/stop")
+async def stop(request_id: int, season: int | None = Query(None, ge=1), episode: int | None = Query(None, ge=1),
+               _user: CurrentUser = Depends(require_user)) -> dict:
+    """Not wanted after all: stop the download and delete what it had (and, for a film Radarr has no
+    file for, take it out of Radarr; for an episode, stop Sonarr wanting its season)."""
+    ep = (season, episode) if season and episode else None
+    req = db.get(request_id)
+    if not req:
+        raise ApiError(404, "not_found", "No such request.")
+    try:
+        await playnow.stop(req, ep)
+    except httpx.HTTPError as e:
+        raise ApiError(502, "arr_unavailable", "Radarr or Sonarr didn't answer: try again.", True) from e
+    await playnow.rebalance()
+    return {"stopped": True}

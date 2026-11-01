@@ -393,3 +393,86 @@ def test_with_a_play_now_tag_continuo_tags_and_leaves_the_switching_alone(vclien
     assert not fake.called("POST", f"{QBT}/torrents/toggleSequentialDownload"), "the tag's owner switches it, not continuo"
     run(qbittorrent.stream_mode(HASH, {"seq_dl": True, "f_l_piece_prio": True, "tags": "movies-extra, watchnow"}))
     assert len(fake.called("POST", f"{QBT}/torrents/addTags")) == 1, "tagged once"
+
+
+def _two_play_nows(fake):
+    """An older Play now (request 1) and a newer one (request 2), each downloading."""
+    from continuo.video import db
+    old = db.create(kind="movie", tmdb_id=1, title="Older", year=2000, poster_path=None, user_id=1)
+    new = db.create(kind="movie", tmdb_id=2, title="Newer", year=2001, poster_path=None, user_id=1)
+    db.update(old["id"], status="downloading", radarr_movie_id=11, play_now_at="2026-11-01T10:00:00+00:00")
+    db.update(new["id"], status="downloading", radarr_movie_id=12, play_now_at="2026-11-01T10:05:00+00:00")
+
+    def queue(r):
+        mid = r.url.params["movieId"]
+        return httpx.Response(200, json=[{"id": int(mid), "downloadId": f"hash{mid}", "protocol": "torrent", "title": f"t{mid}"}])
+    fake.on("GET", f"{RADARR}/queue/details", handler=queue)
+
+    def info(r):
+        h = r.url.params["hashes"]
+        return httpx.Response(200, json=[{"hash": h, "progress": 0.2, "seq_dl": True, "f_l_piece_prio": True, "dl_limit": 0,
+                                          "tags": "watchnow" if h == "hash11" else ""}])
+    fake.on("GET", f"{QBT}/torrents/info", handler=info)
+    for path in ("addTags", "removeTags", "setDownloadLimit", "topPrio"):
+        fake.on("POST", f"{QBT}/torrents/{path}", {})
+    return old, new
+
+
+def test_the_latest_play_now_gets_the_bandwidth(vclient, fake):
+    from continuo.video import playnow
+    config.reload(dict(os.environ, CONTINUO_MODULES="music,video", RADARR_URL="http://radarr.test", RADARR_API_KEY="rd",
+                       QBITTORRENT_URL="http://qbt.test", QBITTORRENT_PLAY_NOW_TAG="watchnow"))
+    make_user()
+    _two_play_nows(fake)
+    run(playnow.rebalance())
+    def body(path):
+        return [c.content.decode() for c in fake.called("POST", f"{QBT}/torrents/{path}")]
+    assert body("addTags") == ["hashes=hash12&tags=watchnow"], "the newer one: tagged (in order)"
+    assert body("topPrio") == ["hashes=hash12"]
+    assert body("removeTags") == ["hashes=hash11&tags=watchnow"], "the older one: back to an ordinary download"
+    assert body("setDownloadLimit") == [f"hashes=hash11&limit={512 * 1024}"], "and slowed"
+
+
+def test_watching_an_older_one_makes_it_the_latest(vclient, fake):
+    from continuo.video import db
+    make_user()
+    s = login(vclient)
+    old, new = _two_play_nows(fake)
+    fake.on("GET", f"{QBT}/torrents/files", [])
+    vclient.get(f"/v1/video/play-now/{old['id']}", headers=bearer(s))
+    assert db.get(old["id"])["play_now_at"] > db.get(new["id"])["play_now_at"]
+
+
+def test_stopping_a_film_removes_its_download_and_radarr_entry(vclient, fake):
+    from continuo.video import db
+    make_user()
+    s = login(vclient)
+    rid = _request()
+    fake.on("GET", f"{RADARR}/queue/details", [{"id": 91, "downloadId": HASH, "protocol": "torrent"}])
+    fake.on("DELETE", f"{RADARR}/queue/91", {})
+    fake.on("GET", f"{RADARR}/movie/7", {"id": 7, "hasFile": False})
+    fake.on("DELETE", f"{RADARR}/movie/7", {})
+    assert vclient.post(f"/v1/video/play-now/{rid}/stop", headers=bearer(s)).json() == {"stopped": True}
+    q = fake.called("DELETE", f"{RADARR}/queue/91")[0].url.params
+    assert (q["removeFromClient"], q["blocklist"]) == ("true", "false"), "deleted, not blocklisted (it wasn't a bad copy)"
+    assert fake.called("DELETE", f"{RADARR}/movie/7")[0].url.params["deleteFiles"] == "true"
+    assert db.get(rid) is None
+
+
+def test_stopping_an_episode_stops_its_season(vclient, fake):
+    from continuo.video import db
+    config.reload(dict(os.environ, CONTINUO_MODULES="music,video", SONARR_URL="http://sonarr.test", SONARR_API_KEY="so"))
+    make_user()
+    s = login(vclient)
+    req = db.create(kind="series", tmdb_id=1396, title="Show", year=2008, poster_path=None, user_id=1, seasons=[1, 2])
+    db.update(req["id"], status="downloading", sonarr_series_id=5)
+    fake.on("GET", f"{SONARR}/queue/details", [{"id": 71, "episode": {"seasonNumber": 2, "episodeNumber": 1}},
+                                               {"id": 72, "episode": {"seasonNumber": 1, "episodeNumber": 4}}])
+    fake.on("DELETE", f"{SONARR}/queue/71", {})
+    fake.on("GET", f"{SONARR}/series/5", {"id": 5, "seasons": [{"seasonNumber": 1, "monitored": True}, {"seasonNumber": 2, "monitored": True}]})
+    fake.on("PUT", f"{SONARR}/series/5", handler=lambda r: fake.body(r))
+    assert vclient.post(f"/v1/video/play-now/{req['id']}/stop", params={"season": 2, "episode": 1}, headers=bearer(s)).status_code == 200
+    assert fake.called("DELETE", f"{SONARR}/queue/71") and not fake.called("DELETE", f"{SONARR}/queue/72"), "only that season's"
+    put = fake.body(fake.called("PUT", f"{SONARR}/series/5")[0])
+    assert [(x["seasonNumber"], x["monitored"]) for x in put["seasons"]] == [(1, True), (2, False)]
+    assert db.get(req["id"])["seasons"] == "[1]", "the request keeps season 1"
