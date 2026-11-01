@@ -26,6 +26,10 @@ def vclient(fake, tmp_path):
                        RADARR_URL="http://radarr.test", RADARR_API_KEY="rd", QBITTORRENT_URL="http://qbt.test",
                        QBITTORRENT_USERNAME="admin", QBITTORRENT_PASSWORD="pw", VIDEO_DOWNLOADS_DIR=str(downloads),
                        QBITTORRENT_DOWNLOADS_DIR="/data/downloads", PUBLIC_BASE_URL="https://api.example"))
+    from continuo.video import playnow
+    from continuo.video.upstream import qbittorrent
+    playnow._layouts.clear()
+    qbittorrent._flipped.clear()
     with TestClient(create_app(disable_workers=True)) as c:
         c.downloads = downloads
         yield c
@@ -211,3 +215,43 @@ def test_play_now_for_another_season_widens_the_request(vclient, fake):
     run(playnow_api._ensure_season(req["id"], 2))
     assert db.get(req["id"])["seasons"] == "[1, 2]"
     assert [fake.body(c)["seasonNumber"] for c in fake.called("POST", f"{SONARR}/command")] == [2]
+
+
+def test_the_download_mode_is_flipped_once_not_back(vclient, fake):
+    """Two checks at once mustn't each flip the toggle (it ended up off on the homelab)."""
+    import asyncio
+
+    from continuo.video.upstream import qbittorrent
+    state = {"seq": False, "fl": False}
+    flips: list = []
+    fake.on("GET", f"{QBT}/torrents/info", handler=lambda r: httpx.Response(200, json=[{"hash": HASH.lower(), "seq_dl": state["seq"], "f_l_piece_prio": state["fl"]}]))
+
+    def flip(name, key):
+        def h(r):
+            flips.append(name)
+            state[key] = not state[key]
+            return httpx.Response(200)
+        return h
+    fake.on("POST", f"{QBT}/torrents/toggleSequentialDownload", handler=flip("seq", "seq"))
+    fake.on("POST", f"{QBT}/torrents/toggleFirstLastPiecePrio", handler=flip("fl", "fl"))
+    stale = {"seq_dl": False, "f_l_piece_prio": False}
+
+    async def both():
+        await asyncio.gather(qbittorrent.stream_mode(HASH, stale), qbittorrent.stream_mode(HASH, stale), qbittorrent.stream_mode(HASH, stale))
+    run(both())
+    assert flips == ["seq", "fl"] and state == {"seq": True, "fl": True}
+
+
+def test_the_stream_remembers_where_the_file_is(vclient, fake, monkeypatch):
+    make_user()
+    s = login(vclient)
+    rid = _request()
+    from continuo.video import playnow
+    monkeypatch.setattr(playnow, "READY_MIN_BYTES", 2 * PIECE)
+    _torrent(fake, vclient, 100 * PIECE, have_pieces=50, total_pieces=101)
+    url = vclient.get(f"/v1/video/play-now/{rid}", headers=bearer(s)).json()["streamUrl"].replace("https://api.example", "")
+    before = len(fake.called("GET", f"{RADARR}/queue/details"))
+    for n in range(4):
+        assert vclient.get(url, headers={"Range": f"bytes={n * PIECE}-{n * PIECE + 99}"}).status_code == 206
+    assert len(fake.called("GET", f"{RADARR}/queue/details")) - before == 1, "the queue asked once, not for every chunk"
+    assert len(fake.called("GET", f"{QBT}/torrents/pieceStates")) >= 4, "what has arrived is still checked every time"
