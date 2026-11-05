@@ -229,3 +229,13 @@ def test_removing_from_the_library(vclient, fake):
     fake.on("DELETE", f"{JELLYFIN}/Items/jf-home", handler=lambda r: httpx.Response(204))
     assert vclient.delete("/v1/video/library/movie/999", headers=bearer(s)).json()["via"] == "jellyfin"
     assert vclient.delete("/v1/video/library/movie/12345", headers=bearer(s)).status_code == 404
+
+
+
+def test_named_accounts_may_delete_without_being_admins(vclient, fake):
+    make_user(role="user")
+    make_user(username="caleb", role="user")
+    config.reload(dict(os.environ, CONTINUO_MODULES="music,video", JELLYFIN_URL=JELLYFIN, JELLYFIN_API_KEY="jf", VIDEO_REMOVERS="Isaac"))
+    assert vclient.get("/v1/video/settings", headers=bearer(login(vclient))).json()["canRemove"] is True
+    assert vclient.get("/v1/video/settings", headers=bearer(login(vclient, username="caleb"))).json()["canRemove"] is False
+    assert vclient.delete("/v1/video/library/movie/1", headers=bearer(login(vclient, username="caleb"))).status_code == 403

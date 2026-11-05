@@ -23,9 +23,11 @@ async def genres(kind: str = Query(..., pattern="^(movie|series)$"), _user: Curr
 
 
 def may_remove(user: CurrentUser) -> bool:
-    """Who may delete from the library: music's rule too (LIBRARY_REMOVAL_ROLE: admin, or anyone)."""
+    """Who may delete from the video library: music's rule (LIBRARY_REMOVAL_ROLE: admin, or anyone),
+    and the accounts named in VIDEO_REMOVERS, without making them admins."""
     from .. import config
-    return config.settings.library_removal_role != "admin" or user.is_admin
+    s = config.settings
+    return s.library_removal_role != "admin" or user.is_admin or user.username.lower() in s.video_removers
 
 
 @router.get("/settings")
