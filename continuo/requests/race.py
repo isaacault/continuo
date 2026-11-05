@@ -81,7 +81,9 @@ async def start(row: dict) -> Optional[dict]:
         tracks = []
     titles = [t.get("title") or "" for t in tracks]
     try:
-        responses = await soulseek.search_any(soulseek.queries(row.get("artist") or "", row.get("title") or ""))
+        responses = await soulseek.search_any(
+            soulseek.queries(row.get("artist") or "", row.get("title") or ""),
+            usable=lambda rs: soulseek.best_album(rs, row.get("title") or "", titles) is not None)
     except soulseek.Offline:
         log.info("race %s: Soulseek is offline, nothing raced for now", row["id"])
         return None     # not recorded as failed: a later tick tries again

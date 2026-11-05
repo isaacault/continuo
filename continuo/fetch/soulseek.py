@@ -13,7 +13,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 
@@ -114,23 +114,32 @@ def download_s(c: Candidate) -> float:
 def score(c: Candidate, artist: str, title: str, duration_ms: Optional[int], policy: str,
           allowed: list[tuple[str, int]]) -> Optional[tuple]:
     """Sort key for a copy (lower is better), or None when it isn't the song."""
+    return judge(c, artist, title, duration_ms, policy, allowed)[0]
+
+
+def judge(c: Candidate, artist: str, title: str, duration_ms: Optional[int], policy: str,
+          allowed: list[tuple[str, int]]) -> tuple[Optional[tuple], str]:
+    """[score], and why a copy was turned down ("" when it wasn't): what a search that found
+    copies but kept none logs."""
     name, path = normalise(c.basename), normalise(c.filename)
     want, by = normalise(title), normalise(artist)
-    if not want or want not in name or (by and by not in path):
-        return None
+    if not want or want not in name:
+        return None, "title"
+    if by and by not in path:
+        return None, "artist"
     if policy == FASTEST:
         rank = 0 if _decent(c) else None
     else:
         rank = _format_rank(c, allowed)
     if rank is None:
-        return None
+        return None, "format"
     if duration_ms and c.length_s and abs(c.length_s - duration_ms / 1000) > _DURATION_SLACK_S:
-        return None
+        return None, "length"
     title_words = set(_VARIANTS.findall(title.lower()))
     variant = any(v not in title_words for v in _VARIANTS.findall(c.basename.lower()))
     if policy == FASTEST:
-        return (variant, not c.free_slot, c.queue_length, download_s(c), c.size)
-    return (variant, rank, not c.free_slot, c.queue_length, -c.upload_speed)
+        return (variant, not c.free_slot, c.queue_length, download_s(c), c.size), ""
+    return (variant, rank, not c.free_slot, c.queue_length, -c.upload_speed), ""
 
 
 AUDIO = {"flac", "mp3", "m4a", "ogg", "opus", "wav", "aiff", "aif", "wv", "ape", "alac"}
@@ -223,6 +232,28 @@ def best(responses: list[dict], artist: str, title: str, duration_ms: Optional[i
     return min(scored, key=lambda p: p[0])[1] if scored else None
 
 
+def turned_down(responses: list[dict], artist: str, title: str, duration_ms: Optional[int] = None,
+                policy: str = LIBRARY, allowed: Optional[list[tuple[str, int]]] = None,
+                variants: bool = True) -> str:
+    """Why [best] found nothing in [responses], for the log: how many copies failed on what
+    ("12 files: title 9, length 3"), and the paths of a few that had the title."""
+    allowed = allowed if allowed is not None else formats(policy)
+    files = candidates(responses)
+    reasons: dict[str, int] = {}
+    near: list[str] = []
+    for c in files:
+        key, why = judge(c, artist, title, duration_ms, policy, allowed)
+        if key is not None and not variants and key[0]:
+            why = "variant"
+        if not why:
+            continue
+        reasons[why] = reasons.get(why, 0) + 1
+        if why != "title" and len(near) < 3:
+            near.append(f"{c.filename} ({why}, {c.extension}, {c.length_s} s, {c.bit_rate} kbps)")
+    counts = ", ".join(f"{k} {v}" for k, v in sorted(reasons.items(), key=lambda kv: -kv[1]))
+    return f"{len(files)} files: {counts or 'none'}" + (f"; e.g. {' | '.join(near)}" if near else "")
+
+
 # slskd ends a search after [quiet_s] without a new response, so a popular one runs well past
 # it (45-50 s seen). Wait for it to finish, up to MAX_SEARCH_S; past that, stop it (its results
 # stay) rather than delete it mid-flight, which loses every response and errors in slskd.
@@ -298,15 +329,24 @@ def queries(artist: str, name: str) -> list[str]:
     return [q for q in out if q and not (q.lower() in seen or seen.add(q.lower()))]
 
 
-async def search_any(texts: list[str], quiet_s: float = 15.0, max_s: float | None = None) -> list[dict]:
-    """The responses of the first of [texts] that gets any; [] when none does."""
+async def search_any(texts: list[str], quiet_s: float = 15.0, max_s: float | None = None,
+                     usable: Optional[Callable[[list[dict]], bool]] = None) -> list[dict]:
+    """The responses of the first of [texts] that gets any; [] when none does. With [usable], the
+    first whose responses it accepts: answers that hold no copy of the song don't stop the wider
+    searches after it (the full "artist title" phrase can answer with nothing playable). The responses of
+    every search made come back together, so nothing found on the way is lost."""
+    found: list[dict] = []
     for text in texts:
         responses = await search(text, quiet_s=quiet_s, max_s=max_s)
-        if responses:
+        if not responses:
+            continue
+        found += responses
+        if usable is None or usable(found):
             if text != texts[0]:
-                log.info("soulseek: nothing for %r; %r found %d", texts[0], text, len(responses))
-            return responses
-    return []
+                log.info("soulseek: nothing usable for %r; %r found %d", texts[0], text, len(responses))
+            return found
+        log.info("soulseek: %r found %d answers but no copy; trying wider", text, len(responses))
+    return found
 
 
 async def enqueue(c: Candidate) -> None:

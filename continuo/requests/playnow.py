@@ -156,8 +156,10 @@ async def _run(stream_id: str) -> None:
 async def _fetch(stream_id: str) -> None:
     row = streams_db.get(stream_id)
     try:
-        responses = await soulseek.search_any(soulseek.queries(row["artist"] or "", row["title"] or ""),
-                                              quiet_s=SEARCH_QUIET_S, max_s=SEARCH_MAX_S)
+        responses = await soulseek.search_any(
+            soulseek.queries(row["artist"] or "", row["title"] or ""), quiet_s=SEARCH_QUIET_S, max_s=SEARCH_MAX_S,
+            usable=lambda rs: soulseek.best(rs, row["artist"], row["title"], row.get("duration_ms"),
+                                            policy=soulseek.FASTEST, variants=False) is not None)
     except soulseek.Offline:
         log.warning("play now %s: Soulseek is offline", stream_id)
         streams_db.update(stream_id, status="failed",
@@ -187,6 +189,10 @@ async def _fetch(stream_id: str) -> None:
             return
         if outcome == "rejected":
             refused.add(best.username)
+    if not tried:
+        log.info("play now %s: no copy of %r by %r among %d answers (%s)", stream_id, row["title"], row["artist"],
+                 len(responses), soulseek.turned_down(responses, row["artist"], row["title"], row.get("duration_ms"),
+                                                      policy=soulseek.FASTEST, variants=False))
     # Nothing to try reads differently from copies that wouldn't come: three of four failures so
     # far tried no copy at all, and "nobody could send" pointed at the peers.
     error = ("Nobody on Soulseek could send this song right now." if tried

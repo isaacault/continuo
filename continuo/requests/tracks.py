@@ -117,21 +117,28 @@ def _status(row: dict, to: str, **fields) -> dict:
     return row
 
 
+def _untried(responses: list[dict], tried: set, refused: set) -> list[dict]:
+    """[responses] without the copies that already failed or anyone who rejected us."""
+    return [dict(r, files=[f for f in r.get("files") or [] if (r.get("username"), f.get("filename")) not in tried])
+            for r in responses if r.get("username") not in refused]
+
+
 async def _search(row: dict) -> dict:
     t = row["track"]
     fetch = row.get("fetch") or {}
     tried = {tuple(x) for x in fetch.get("tried") or []}
     refused = set(fetch.get("refused") or [])
     try:
-        responses = await soulseek.search_any(soulseek.queries(t.get("artist") or "", t["title"]))
+        responses = await soulseek.search_any(
+            soulseek.queries(t.get("artist") or "", t["title"]),
+            usable=lambda rs: soulseek.best(_untried(rs, tried, refused), t.get("artist") or "", t["title"],
+                                            t.get("durationMs"), variants=False) is not None)
     except soulseek.Offline:
         # Not a search that found nothing: it doesn't count, and it's tried again soon.
         log.info("track %s: Soulseek is offline, trying again later", row["id"])
         return _status(row, "searching", next_attempt_at=_later(1))
     # Copies that already failed don't count, nor anything from someone who rejected us.
-    responses = [r for r in responses if r.get("username") not in refused]
-    for r in responses:
-        r["files"] = [f for f in r.get("files") or [] if (r.get("username"), f.get("filename")) not in tried]
+    responses = _untried(responses, tried, refused)
     best = soulseek.best(responses, t.get("artist") or "", t["title"], t.get("durationMs"), variants=False)
     req_db.update(row["id"], last_search_at=now())
     if best is None:

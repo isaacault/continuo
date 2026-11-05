@@ -130,6 +130,49 @@ def test_search_any_takes_the_first_search_that_answers(monkeypatch):
     assert asked == ["Kendrick Lamar PRIDE", "PRIDE Lamar"] and out
 
 
+def test_search_any_goes_wider_when_the_answers_hold_no_copy(monkeypatch):
+    """"JPEGMAFIA 1539 N Calvert" answered, but with nothing playable: the title alone is still
+    searched, and what both found comes back together."""
+    import asyncio
+    asked = []
+    other = _resp("other", [_f(r"@@a\JPEGMAFIA\Veteran\Baby I'm Bleeding.mp3", kbps=320, length=150)])
+    song = _resp("song", [_f(r"@@b\JPEGMAFIA - Veteran\05 1539 N. Calvert.flac", length=157)])
+
+    async def search(text, **_kw):
+        asked.append(text)
+        return [other] if "JPEGMAFIA" in text else [song]
+    monkeypatch.setattr(soulseek, "search", search)
+
+    def usable(rs):
+        return soulseek.best(rs, "JPEGMAFIA", "1539 N. Calvert", 157_000, soulseek.FASTEST, FORMATS) is not None
+    out = asyncio.run(soulseek.search_any(soulseek.queries("JPEGMAFIA", "1539 N. Calvert"), usable=usable))
+    assert asked == ["JPEGMAFIA 1539 N Calvert", "1539 N Calvert"]
+    assert out == [other, song]
+    assert soulseek.best(out, "JPEGMAFIA", "1539 N. Calvert", 157_000, soulseek.FASTEST, FORMATS).username == "song"
+
+
+def test_search_any_stops_at_the_first_usable_answer(monkeypatch):
+    import asyncio
+    asked = []
+
+    async def search(text, **_kw):
+        asked.append(text)
+        return [{"username": "u", "files": []}]
+    monkeypatch.setattr(soulseek, "search", search)
+    asyncio.run(soulseek.search_any(["a", "b", "c"], usable=lambda rs: True))
+    assert asked == ["a"]
+
+
+def test_turned_down_says_why_no_copy_was_kept():
+    rs = [_resp("a", [_f(r"@@a\Peach Pit\Shampoo Bottles.mp3", kbps=320, length=300),
+                      _f(r"@@a\Peach Pit\Alright.mp3", kbps=320, length=212)]),
+          _resp("b", [_f(r"@@b\Shampoo Bottles.flac", length=212)])]
+    why = soulseek.turned_down(rs, "Peach Pit", "Shampoo Bottles", 212_000, soulseek.FASTEST, FORMATS)
+    assert why.startswith("3 files: ")
+    assert "length 1" in why and "title 1" in why and "artist 1" in why
+    assert "Alright" not in why, "copies without the title aren't listed"
+
+
 def test_play_now_takes_the_copy_that_arrives_soonest_in_any_decent_format():
     flac = _resp("flac", [_f(r"@@a\Peach Pit\Shampoo Bottles.flac", length=212, size=40_000_000)], speed=2_000_000)
     mp3 = _resp("mp3", [_f(r"@@b\Peach Pit\Shampoo Bottles.mp3", kbps=256, length=212, size=7_000_000)], speed=2_000_000)
