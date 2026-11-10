@@ -49,7 +49,8 @@ async def _start_series(req: dict) -> None:
         if not tvdb:
             raise LookupError("TMDB knows no TVDB ID for this series, which Sonarr needs.")
         added = await sonarr.request(int(tvdb), json.loads(req["seasons"]) if req["seasons"] else None,
-                                     anime=tmdb.is_anime(show))
+                                     future=req.get("future") is None or bool(req["future"]), anime=tmdb.is_anime(show),
+                                     picks=json.loads(req["episodes"]) if req.get("episodes") else None)
     except (httpx.HTTPError, LookupError, tmdb.Unavailable) as e:
         db.update(req["id"], status="failed", error=f"Sonarr: {e}" if isinstance(e, httpx.HTTPError) else str(e))
         await _notify(db.get(req["id"]), "video_request_failed")
@@ -57,8 +58,17 @@ async def _start_series(req: dict) -> None:
     db.update(req["id"], status="searching", sonarr_series_id=added.get("id"))
 
 
-async def _tick_series(req: dict, refreshed: list) -> None:
+def asked_seasons(req: dict) -> list[int] | None:
+    """The seasons a series request covers, whole or in part (None: every season but specials)."""
     import json
+    seasons = json.loads(req["seasons"]) if req.get("seasons") else None
+    picks = json.loads(req["episodes"]) if req.get("episodes") else None
+    if seasons is None and not picks:
+        return None
+    return sorted(set(seasons or []) | {p["season"] for p in picks or []})
+
+
+async def _tick_series(req: dict, refreshed: list) -> None:
     if not req["sonarr_series_id"]:
         return
     try:
@@ -67,7 +77,7 @@ async def _tick_series(req: dict, refreshed: list) -> None:
     except httpx.HTTPError as e:
         log.warning("video request %s: Sonarr unreachable: %s", req["id"], e)
         return
-    if sonarr.seasons_complete(show, json.loads(req["seasons"]) if req["seasons"] else None):
+    if sonarr.seasons_complete(show, asked_seasons(req)):
         if not refreshed:
             await index.refresh()
             refreshed.append(True)
