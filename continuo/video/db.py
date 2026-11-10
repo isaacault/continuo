@@ -7,13 +7,15 @@ ACTIVE = ("requested", "searching", "downloading", "importing")
 
 
 def create(*, kind: str, tmdb_id: int, title: str | None, year: int | None, poster_path: str | None,
-           user_id: int | None, seasons: list[int] | None = None) -> dict:
+           user_id: int | None, seasons: list[int] | None = None, episodes: list[dict] | None = None,
+           future: bool | None = None) -> dict:
     ts = now()
     with connect() as c:
         cur = c.execute(
-            "INSERT INTO video_requests (kind, tmdb_id, title, year, poster_path, seasons, status, user_id,"
-            " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?)",
+            "INSERT INTO video_requests (kind, tmdb_id, title, year, poster_path, seasons, episodes, future, status,"
+            " user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?)",
             (kind, tmdb_id, title, year, poster_path, json.dumps(seasons) if seasons is not None else None,
+             json.dumps(episodes) if episodes else None, None if future is None else int(future),
              user_id, ts, ts))
         return row(c.execute("SELECT * FROM video_requests WHERE id=?", (cur.lastrowid,)).fetchone())
 

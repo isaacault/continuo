@@ -265,18 +265,51 @@ async def _tmdb(call):
         raise ApiError(503, "catalog_unavailable", "TMDB isn't answering right now.", True) from e
 
 
+class EpisodePick(BaseModel):
+    season: int
+    episodes: list[int]
+    # And the season's later episodes as they air (a pick that runs to the season's end).
+    onward: bool = False
+
+
 class RequestIn(BaseModel):
     kind: str
     tmdbId: int
-    # A series: which seasons (none: every aired season but specials).
+    # A series: which whole seasons, and which episodes of others (neither: every season but specials).
     seasons: list[int] | None = None
+    episodes: list[EpisodePick] | None = None
+    # A series: new seasons too, as they come out (none: yes).
+    future: bool | None = None
+
+
+class SelectionIn(BaseModel):
+    seasons: list[int] | None = None
+    episodes: list[EpisodePick] | None = None
+    future: bool = True
+    # Also delete the files of episodes no longer asked for (as Delete from library may).
+    deleteFiles: bool = False
+
+
+def _picks(episodes: list[EpisodePick] | None) -> list[dict] | None:
+    """Picks as stored and sent to Sonarr: one per season, episodes sorted, empty ones dropped."""
+    by: dict[int, dict] = {}
+    for p in episodes or []:
+        if p.season < 0 or any(n < 1 for n in p.episodes):
+            raise ApiError(400, "bad_episodes", "Seasons and episodes are numbered from 0 and 1.")
+        cur = by.setdefault(p.season, {"season": p.season, "episodes": set(), "onward": False})
+        cur["episodes"] |= set(p.episodes)
+        cur["onward"] = cur["onward"] or p.onward
+    out = [{**p, "episodes": sorted(p["episodes"])} for _, p in sorted(by.items()) if p["episodes"]]
+    return out or None
 
 
 def _request_out(r: dict) -> dict:
     return {"id": r["id"], "kind": r["kind"], "tmdbId": r["tmdb_id"], "title": r["title"], "year": r["year"],
             "poster": _image(r.get("poster_path")), "status": r["status"], "error": r.get("error"),
             "jellyfinId": r.get("jellyfin_id"), "createdAt": r["created_at"], "availableAt": r.get("available_at"),
-            "seasons": json.loads(r["seasons"]) if r.get("seasons") else None}
+            "seasons": json.loads(r["seasons"]) if r.get("seasons") else None,
+            "episodes": json.loads(r["episodes"]) if r.get("episodes") else None,
+            "future": r.get("future") is None or bool(r["future"])}
 
 
 @router.get("/requests")
@@ -307,13 +340,46 @@ async def request_title(body: RequestIn, user: CurrentUser, play_now: bool = Fal
             year = int(date[:4]) if date[:4].isdigit() else None
         except tmdb.Unavailable:
             pass
+    series = body.kind == "series"
+    picks = _picks(body.episodes) if series else None
+    whole = sorted(set(body.seasons)) if series and body.seasons else None
     req = db.create(kind=body.kind, tmdb_id=body.tmdbId, title=title, year=year, poster_path=poster, user_id=user.id,
-                    seasons=sorted(set(body.seasons)) if body.kind == "series" and body.seasons else None)
+                    seasons=[] if picks and whole is None else whole, episodes=picks,
+                    future=body.future if series else None)
     from . import requests as pipeline
     task = asyncio.get_running_loop().create_task(pipeline.start(req["id"], play_now=play_now))
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
     return {"request": _request_out(req), "created": True}
+
+
+@router.put("/requests/{request_id}")
+async def change_request(request_id: int, body: SelectionIn, user: CurrentUser = Depends(require_user)) -> dict:
+    """Changes what a series request asks for: Sonarr then wants exactly this, downloads of the rest
+    stop, and (deleteFiles) episodes already downloaded that are no longer asked for are deleted."""
+    from . import browse
+    from .upstream import sonarr
+    req = db.get(request_id)
+    if not req or (req["user_id"] != user.id and user.role != "admin"):
+        raise ApiError(404, "not_found", "No such request.")
+    if req["kind"] != "series":
+        raise ApiError(400, "not_a_series", "Only a series request can name seasons and episodes.")
+    if not req.get("sonarr_series_id"):
+        raise ApiError(409, "not_in_sonarr_yet", "Sonarr hasn't got this series yet: try again in a moment.", True)
+    if body.deleteFiles and not browse.may_remove(user):
+        raise ApiError(403, "forbidden", "This account can't delete from the library.")
+    picks = _picks(body.episodes)
+    whole = sorted(set(body.seasons)) if body.seasons else None
+    if not whole and not picks:
+        raise ApiError(400, "nothing_asked", "Pick at least one season or episode, or delete the request instead.")
+    seasons = whole or []
+    try:
+        done = await sonarr.replace(req["sonarr_series_id"], seasons, picks, body.future, delete_files=body.deleteFiles)
+    except httpx.HTTPError as e:
+        raise ApiError(503, "sonarr_unavailable", f"Sonarr: {e}", True) from e
+    db.update(request_id, seasons=json.dumps(seasons), episodes=json.dumps(picks) if picks else None,
+              future=int(body.future), **({"status": "searching"} if req["status"] in db.ACTIVE else {}))
+    return {"request": _request_out(db.get(request_id)), **done}
 
 
 @router.delete("/requests/{request_id}", status_code=204)
