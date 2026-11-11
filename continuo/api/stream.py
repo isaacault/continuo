@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from ..auth.deps import CurrentUser, require_user
 from ..errors import ApiError
-from ..stream import encoder, playlists
+from ..stream import activity, encoder, playlists
 from ..upstream import navidrome
 
 log = logging.getLogger("continuo")
@@ -101,6 +101,8 @@ async def segment(song: str, kbps: int, name: str,
         raise ApiError(502, "encode_failed", "This song couldn't be encoded.") from e
     if path is None:
         raise ApiError(404, "not_found", "No such segment.")
+    if name != "init.mp4":
+        activity.segment_served(kbps)
     return FileResponse(path, media_type="audio/mp4",
                         headers={"Cache-Control": "private, max-age=86400"})
 
@@ -121,6 +123,7 @@ async def upcoming(body: UpcomingIn, user: CurrentUser = Depends(require_user)) 
     for key in _upcoming.get(user.device_id, set()) - set(wanted):
         encoder.cancel_waiting(*key)
     _upcoming[user.device_id] = set(wanted)
+    activity.upcoming(user.device_id, len(body.songs), kbps, body.lowerToo)
     for song, k in wanted:
         encoder.touch(song)
         encoder.ensure(song, k, user.navidrome_username, prefetch=True)

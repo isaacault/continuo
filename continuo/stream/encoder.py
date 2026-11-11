@@ -28,7 +28,7 @@ from urllib.parse import urlencode
 
 from .. import config
 from ..upstream import navidrome
-from . import gapless
+from . import activity, gapless
 
 log = logging.getLogger("continuo")
 
@@ -60,6 +60,8 @@ class Job:
     started: bool = False
     segments: tuple[float, ...] = ()
     error: Optional[str] = None
+    codec: str = ""                 # the source's, once probed
+    began: float = 0.0              # time.monotonic() when the encode started
     ready: asyncio.Event = field(default_factory=asyncio.Event)    # init.mp4 + segment list known
     done: asyncio.Event = field(default_factory=asyncio.Event)
     task: Optional[asyncio.Task] = None
@@ -75,6 +77,7 @@ def reset() -> None:
     global _slots, _ahead
     _jobs.clear()
     _slots = _ahead = None
+    activity.reset()
 
 
 def _semaphores() -> tuple[asyncio.Semaphore, asyncio.Semaphore]:
@@ -259,6 +262,11 @@ async def _run(job: Job, as_user: Optional[str]) -> None:
     finally:
         job.ready.set()
         job.done.set()
+        if job.error and job.error != "cancelled":
+            activity.failed(job.song, job.kbps, prefetch=job.prefetch, error=job.error)
+        elif not job.error:
+            activity.encoded(job.song, job.kbps, prefetch=job.prefetch, codec=job.codec,
+                             seconds=time.monotonic() - job.began, segments=len(job.segments))
         if job.error:
             # A job cancelled before it started never made its directory, and a replacement
             # (the same song wanted for playing) may be using it now.
@@ -270,11 +278,12 @@ async def _run(job: Job, as_user: Optional[str]) -> None:
 
 async def _encode(job: Job, as_user: Optional[str]) -> None:
     job.started = True
-    started = time.monotonic()
+    started = job.began = time.monotonic()
     shutil.rmtree(job.dir, ignore_errors=True)
     job.dir.mkdir(parents=True)
     url, headers = _source_url(job.song, as_user)
     src = await probe(url, headers)
+    job.codec = src.codec
     plan = None
     if src.exact and src.samples:
         plan = gapless.plan(gapless.resampled_count(src.samples, src.rate))
@@ -345,6 +354,21 @@ def _size(d: Path) -> int:
             except OSError:
                 pass
     return total
+
+
+def running() -> list[dict]:
+    """Encodes not finished: playing ones and those ahead, started or waiting for a slot."""
+    now = time.monotonic()
+    return [{"song": j.song, "kbps": j.kbps, "ahead": j.prefetch, "started": j.started,
+             "seconds": round(now - j.began, 1) if j.started else None}
+            for j in _jobs.values() if not j.done.is_set()]
+
+
+def cache_usage() -> dict:
+    root = cache_root()
+    songs = [d for d in root.iterdir() if d.is_dir()] if root.exists() else []
+    return {"songs": len(songs), "bytes": sum(_size(d) for d in songs),
+            "capBytes": config.settings.hls_cache_mb * 1024 * 1024}
 
 
 def evict() -> None:

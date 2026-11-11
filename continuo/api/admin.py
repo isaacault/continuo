@@ -83,6 +83,15 @@ async def stats(_admin: CurrentUser = Depends(require_admin)) -> dict:
     return out
 
 
+@router.get("/stream")
+async def stream_activity(_admin: CurrentUser = Depends(require_admin)) -> dict:
+    """Adaptive streaming since continuo started (polyphony#185): segments served per level (the
+    players moving between levels), encodes running and recent, failures, each device's last
+    songs-ahead, and the cache. In memory only, for looking at; nothing decides from it."""
+    from ..stream import activity, encoder
+    return {**activity.report(), "running": encoder.running(), "cache": encoder.cache_usage()}
+
+
 def _user_out(u: dict) -> dict:
     return {"id": u["id"], "username": u["username"], "role": u["role"],
             "navidromeUsername": u.get("navidrome_username") or u["username"],

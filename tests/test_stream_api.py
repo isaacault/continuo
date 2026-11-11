@@ -226,3 +226,30 @@ def test_cache_drops_least_recently_played_songs(fake, monkeypatch, tmp_path):
         os.utime(encoder.song_dir(song) / ".used", (1000 + i, 1000 + i))
     encoder.evict()
     assert sorted(p.name for p in encoder.cache_root().iterdir()) == ["new"]
+
+
+def test_admin_sees_what_was_served_encoded_and_asked_for(client, hls, session, monkeypatch):
+    h = bearer(session)
+    client.get("/v1/stream/tr1/256/init.mp4", headers=h)
+    client.get("/v1/stream/tr1/256/0.m4s", headers=h)
+    client.get("/v1/stream/tr1/32/1.m4s", headers=h)       # the player dropped a level
+    client.post("/v1/stream/upcoming", headers=h, json={"songs": ["tr1"], "kbps": 32})
+    _settle()
+    monkeypatch.setattr(encoder, "_exec", FakeFfmpeg(fail=True))
+    client.get("/v1/stream/tr1/64/0.m4s", headers=h)
+    r = client.get("/v1/admin/stream", headers=h)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["segmentsServed"] == {"32": 1, "256": 1}  # segments, not init segments
+    assert body["encodesFailed"] == 1
+    recent = body["recentEncodes"]
+    assert "ffmpeg exited 1" in recent[0]["error"] and recent[0]["kbps"] == 64
+    assert {(e["kbps"], e["codec"], e["segments"]) for e in recent[1:]} == {(256, "flac", 2), (32, "flac", 2)}
+    assert [d["kbps"] for d in body["upcoming"].values()] == [32]
+    assert body["running"] == []
+    assert body["cache"]["songs"] == 1 and body["cache"]["bytes"] > 0
+
+
+def test_admin_stream_is_for_admins(client, hls):
+    make_user("guest", role="user")
+    assert client.get("/v1/admin/stream", headers=bearer(login(client, "guest"))).status_code == 403
