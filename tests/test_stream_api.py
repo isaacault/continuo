@@ -103,6 +103,27 @@ def test_media_playlist_is_planned_from_the_source(client, hls, session):
     assert r.text.rstrip().endswith("#EXT-X-ENDLIST")
 
 
+def test_a_lossless_songs_playlists_cost_no_encode(client, hls, session):
+    # Media3 reads the first-listed rendition's playlist to prepare, then plays another.
+    ff, _ = hls
+    h = bearer(session)
+    for kbps in (32, 256):
+        r = client.get(f"/v1/stream/tr1/{kbps}/index.m3u8", headers=h)
+        assert "#EXTINF:6.000000,\n0.m4s\n#EXTINF:4.007354,\n1.m4s" in r.text
+    assert ff.encodes == [] and ff.probes == 1
+    client.get("/v1/stream/tr1/256/init.mp4", headers=h)
+    _settle()
+    assert [c[c.index("-b:a") + 1] for c in ff.encodes] == ["256k"]
+    assert ff.probes == 1                         # the encode reuses the probe
+
+
+def test_a_lossy_songs_playlist_still_comes_from_its_encode(client, hls, session, monkeypatch):
+    ff = FakeFfmpeg(codec="mp3")
+    monkeypatch.setattr(encoder, "_exec", ff)
+    client.get("/v1/stream/tr1/64/index.m3u8", headers=bearer(session))
+    assert len(ff.encodes) == 1
+
+
 def test_init_is_the_gapless_rewrite(client, hls, session):
     r = client.get("/v1/stream/tr1/64/init.mp4", headers=bearer(session))
     assert r.status_code == 200
