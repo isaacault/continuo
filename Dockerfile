@@ -7,6 +7,10 @@ RUN pip install --no-cache-dir --prefix=/install .
 
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PORT=8080 DB_PATH=/data/continuo.db
+# ffmpeg/ffprobe encode songs into Opus HLS renditions (continuo/stream, polyphony#185). Before
+# the code, so a code change doesn't reinstall it.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /install /usr/local
 # /data holds the SQLite DB (+ .jwt_secret if JWT_SECRET is unset); bind-mount it with the same
 # uid (compose sets user: PUID:PGID).
