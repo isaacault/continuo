@@ -82,8 +82,15 @@ async def _ready(song: str, kbps: int, user: CurrentUser) -> encoder.Job:
 
 @router.get("/{song}/{kbps}/index.m3u8")
 async def media(song: str, kbps: int, user: CurrentUser = Depends(require_user)) -> Response:
-    job = await _ready(song, kbps, user)
-    return Response(playlists.media(job.segments), media_type=playlists.MPEGURL,
+    # From the song's plan when it's known up front: the player reads one rendition's playlist
+    # only to prepare, and that shouldn't cost an encode. The encode starts with init.mp4.
+    try:
+        segments = await encoder.planned_segments(_song(song), _level(kbps), user.navidrome_username)
+    except encoder.EncodeError as e:
+        raise ApiError(502, "encode_failed", "This song couldn't be encoded.") from e
+    if segments is None:
+        segments = (await _ready(song, kbps, user)).segments
+    return Response(playlists.media(segments), media_type=playlists.MPEGURL,
                     headers={"Cache-Control": "no-store"})
 
 

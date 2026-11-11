@@ -68,6 +68,8 @@ class Job:
 
 
 _jobs: dict[tuple[str, int], Job] = {}
+_probed: dict[str, Source] = {}     # song -> its source, until its file changes (check_source)
+_PROBED_MAX = 512
 _slots: Optional[asyncio.Semaphore] = None
 _ahead: Optional[asyncio.Semaphore] = None
 
@@ -76,6 +78,7 @@ def reset() -> None:
     """For tests: forget the jobs and the semaphores (bound to the previous event loop)."""
     global _slots, _ahead
     _jobs.clear()
+    _probed.clear()
     _slots = _ahead = None
     activity.reset()
 
@@ -115,6 +118,7 @@ def check_source(song: str, fingerprint: str) -> None:
     d = song_dir(song)
     marker = d / ".source"
     if marker.exists() and marker.read_text() != fingerprint:
+        _probed.pop(song, None)
         if not any(j.song == song and not j.done.is_set() for j in _jobs.values()):
             shutil.rmtree(d, ignore_errors=True)
             for key in [k for k in _jobs if k[0] == song]:
@@ -201,6 +205,38 @@ def _actual(out: Path) -> tuple[int, int]:
     return packets, declared
 
 
+async def source(song: str, as_user: Optional[str]) -> Source:
+    """The song's source as ffprobe reads it, probed once while Navidrome's file is unchanged."""
+    src = _probed.get(song)
+    if src is None:
+        url, headers = _source_url(song, as_user)
+        src = await probe(url, headers)
+        _probed[song] = src
+        while len(_probed) > _PROBED_MAX:
+            _probed.pop(next(iter(_probed)))
+    return src
+
+
+async def planned_segments(song: str, kbps: int, as_user: Optional[str]) -> Optional[tuple[float, ...]]:
+    """A rendition's segment durations without encoding it, when they're known up front: encoded
+    already, or a lossless source (gapless.plan). None when only its encode can tell (a lossy source,
+    or an encode still starting).
+
+    The player reads the first-listed rendition's playlist to prepare and then plays the one its
+    throughput allows; this keeps that first read from encoding a rendition nobody plays."""
+    job = _jobs.get((song, kbps))
+    if job is not None and not (job.done.is_set() and job.error):
+        return job.segments if job.ready.is_set() and not job.error else None
+    on_disk = Job(song, kbps, song_dir(song) / str(kbps))
+    if _from_disk(on_disk):
+        _jobs[(song, kbps)] = on_disk
+        return on_disk.segments
+    src = await source(song, as_user)
+    if src.exact and src.samples:
+        return gapless.plan(gapless.resampled_count(src.samples, src.rate)).segments
+    return None
+
+
 def _from_disk(job: Job) -> bool:
     meta = job.dir / "meta.json"
     if not meta.exists() or not (job.dir / "init.mp4").exists():
@@ -282,7 +318,7 @@ async def _encode(job: Job, as_user: Optional[str]) -> None:
     shutil.rmtree(job.dir, ignore_errors=True)
     job.dir.mkdir(parents=True)
     url, headers = _source_url(job.song, as_user)
-    src = await probe(url, headers)
+    src = _probed.get(job.song) or await source(job.song, as_user)
     job.codec = src.codec
     plan = None
     if src.exact and src.samples:
