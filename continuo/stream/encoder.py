@@ -90,7 +90,7 @@ def valid_id(song: str) -> bool:
 
 
 def cache_root() -> Path:
-    d = config.settings.hls_cache_dir or os.path.join(os.path.dirname(config.settings.db_path) or ".", "hls")
+    d = config.settings.hls_cache_dir or os.path.join(os.path.dirname(config.settings.db_path) or ".", "cache", "hls")
     return Path(d)
 
 

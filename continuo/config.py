@@ -219,7 +219,8 @@ class Settings:
     artwork_cache_mb: int = 200
     artwork_max_bytes: int = 10 * 1024 * 1024
     # Adaptive streaming (polyphony#185): songs encoded to Opus HLS renditions on this machine.
-    # Empty dir = <dir of DB_PATH>/hls. The cache drops least recently played songs past its size.
+    # Empty dir = <dir of DB_PATH>/cache/hls (a `cache` folder: the homelab's restic skips **/cache).
+    # The cache drops least recently played songs past its size.
     hls_cache_dir: str = ""
     hls_cache_mb: int = 2048
     # ffmpeg processes at once (one of them may be encoding songs ahead of the player).

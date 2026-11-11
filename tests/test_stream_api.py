@@ -92,8 +92,9 @@ def test_master_asks_navidrome_as_the_listener(client, fake, hls, session):
 
 def test_unknown_song_is_404(client, hls, session):
     assert client.get("/v1/stream/nope/master.m3u8", headers=bearer(session)).status_code == 404
-    assert client.get("/v1/stream/..%2Fx/master.m3u8", headers=bearer(session)).status_code == 404
-
+    assert client.get("/v1/stream/a..b/master.m3u8", headers=bearer(session)).status_code == 404
+    # ../x routes as song "..", kbps "x": refused before any path is built
+    assert client.get("/v1/stream/..%2Fx/master.m3u8", headers=bearer(session)).status_code in (404, 422)
 
 def test_media_playlist_is_planned_from_the_source(client, hls, session):
     r = client.get("/v1/stream/tr1/64/index.m3u8", headers=bearer(session))
