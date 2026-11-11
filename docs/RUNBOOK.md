@@ -319,3 +319,47 @@ token) gives median/p90 seconds per source for request → download start → fi
 available in Navidrome, plus the recent requests. Milestones are recorded by the 45 s status loop
 and the Lidarr webhook; requests made before 0.2's migration were backfilled from the event log,
 where "first file" is only known as "all files in" (an upper bound).
+
+## Adaptive streaming (polyphony#185, decided 2026-11-11 with the user)
+
+**Decision, reversing PLAN.md §2.5's "no audio through the backend".** The user wants playback to
+follow the connection *as it is now*, on mobile data and on Wi-Fi: a rural road trip flapping
+between slow and no signal, or a slow but steady link, should get smaller audio and the queue sent
+ahead, with no learned or remembered history. A progressive Navidrome transcode is one bitrate per
+song, so continuo now serves songs as **HLS: Opus in 6 s fMP4 segments at 32/64/128/256 kbit/s**
+(`continuo/stream`, `/v1/stream/*`), encoded here with ffmpeg; the player (Media3) changes level
+between segments from the throughput it measures. §2.5's concerns, and what answers them:
+
+- *Jetson CPU*: each rendition is encoded once (~4–5 s per 4-minute song, ~50× real time, at
+  `nice 10`), at most `HLS_MAX_ENCODES` (2) at a time, then served from disk.
+- *Memory / an extra hop*: FastAPI serves small playlists and files from disk (a few hundred
+  kbit/s for one listener), no transcoding in the request path.
+- *A playback single point of failure*: the façade (`/rest/stream` via Navidrome) is unchanged and
+  stays the fallback; Cast/DLNA receivers keep using it.
+
+**Gapless.** Proved in Polyphony's `HlsGaplessSpikeTest` (docs/spikes/hls-gapless there) and in
+`tests/test_stream_gapless.py`: each rendition's init segment gets `dOps` PreSkip zeroed (Media3
+1.11.1 misreads the big-endian box, androidx/media#3431) and an `iTunSMPB` tag with the delay and
+the tail padding, which Media3 trims; songs cut from one tone join to within a sample. AAC was
+rejected: ffmpeg doesn't mark its priming in fMP4.
+
+**Ahead of the player.** `POST /v1/stream/upcoming` (the next songs and the level the phone is on)
+encodes up to 4 songs ahead, and the next one a level lower when `lowerToo`; songs-ahead never
+take the last encode slot, and only the latest list per device is kept (in memory).
+
+**Settings.** `HLS_CACHE_DIR` (default `<dir of DB_PATH>/cache/hls`, i.e. `/data/cache/hls`; restic's
+`**/cache` exclude keeps it out of backups), `HLS_CACHE_MB`
+(2048; least recently played songs leave first), `HLS_MAX_ENCODES` (2), `FFMPEG_PATH`,
+`FFPROBE_PATH`. ffmpeg reads the original file from `NAVIDROME_URL` as the listener (same auth as
+the façade's calls); no new mounts. Caddy already sends `/v1/*` to continuo.
+
+**Check after deploying** (a song id from Navidrome, a device token from a sign-in):
+
+```bash
+H="Authorization: Bearer $TOKEN"
+curl -s -H "$H" https://music-api.ault.me/v1/stream/$SONG/master.m3u8        # 4 renditions
+time curl -s -H "$H" -o /dev/null https://music-api.ault.me/v1/stream/$SONG/64/0.m4s  # ~1 s cold
+curl -s -H "$H" https://music-api.ault.me/v1/stream/$SONG/64/index.m3u8       # VOD, ENDLIST
+docker logs continuo 2>&1 | grep 'hls:'                                         # encoded in N s
+du -sh /ssd/appdata/continuo/cache/hls
+```

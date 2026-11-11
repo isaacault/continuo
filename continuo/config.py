@@ -218,6 +218,15 @@ class Settings:
     artwork_cache_dir: str = ""
     artwork_cache_mb: int = 200
     artwork_max_bytes: int = 10 * 1024 * 1024
+    # Adaptive streaming (polyphony#185): songs encoded to Opus HLS renditions on this machine.
+    # Empty dir = <dir of DB_PATH>/cache/hls (a `cache` folder: the homelab's restic skips **/cache).
+    # The cache drops least recently played songs past its size.
+    hls_cache_dir: str = ""
+    hls_cache_mb: int = 2048
+    # ffmpeg processes at once (one of them may be encoding songs ahead of the player).
+    hls_max_encodes: int = 2
+    ffmpeg_path: str = "ffmpeg"
+    ffprobe_path: str = "ffprobe"
 
     # --- server ---
     port: int = 8080
@@ -379,6 +388,11 @@ def load(env: dict | None = None) -> Settings:
         artwork_cache_dir=_str(e, "ARTWORK_CACHE_DIR"),
         artwork_cache_mb=_int(e, "ARTWORK_CACHE_MB", 200),
         artwork_max_bytes=_int(e, "ARTWORK_MAX_BYTES", 10 * 1024 * 1024),
+        hls_cache_dir=_str(e, "HLS_CACHE_DIR"),
+        hls_cache_mb=_int(e, "HLS_CACHE_MB", 2048),
+        hls_max_encodes=max(1, _int(e, "HLS_MAX_ENCODES", 2)),
+        ffmpeg_path=_str(e, "FFMPEG_PATH", "ffmpeg"),
+        ffprobe_path=_str(e, "FFPROBE_PATH", "ffprobe"),
         port=_int(e, "PORT", 8080),
         log_json=_bool(e, "LOG_JSON", True),
     )
