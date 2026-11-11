@@ -8,10 +8,10 @@ from typing import Callable
 
 
 def routers() -> list:
-    from ..api import internal, library, playnow, requests, scrobbling, search, subsonic
+    from ..api import internal, library, playnow, requests, scrobbling, search, stream, subsonic
     from . import admin
     return [search.router, requests.router, internal.router, library.router, playnow.router,
-            scrobbling.router, subsonic.router, admin.router]
+            scrobbling.router, subsonic.router, stream.router, admin.router]
 
 
 def health_checks() -> dict:
