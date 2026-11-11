@@ -12,8 +12,8 @@ from pathlib import Path
 
 import httpx
 import pytest
-
 from conftest import bearer, login, make_user
+
 from continuo import config
 from continuo.stream import encoder
 
