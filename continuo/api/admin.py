@@ -92,6 +92,23 @@ async def stream_activity(_admin: CurrentUser = Depends(require_admin)) -> dict:
     return {**activity.report(), "running": encoder.running(), "cache": encoder.cache_usage()}
 
 
+@router.get("/connection")
+async def connection(days: int = Query(7, ge=1, le=28), device: str | None = Query(None, max_length=64),
+                     _admin: CurrentUser = Depends(require_admin)) -> dict:
+    """How each phone's streaming went over the last [days] (polyphony#185 phase 2), from the
+    connection samples it sent: per device (the one streamed from last first), its throughput,
+    stalls by network kind and at home or away, the HLS levels it played, and its last samples."""
+    import time
+
+    from ..db import connection_samples
+    from ..stream import connection as report
+    since_ms = int(time.time() * 1000) - days * 86_400_000
+    rows = connection_samples.since(since_ms)
+    if device:
+        rows = [r for r in rows if r["device_id"] == device]
+    return {"days": days, "keptDays": connection_samples.KEEP_DAYS, "devices": report.report(rows)}
+
+
 def _user_out(u: dict) -> dict:
     return {"id": u["id"], "username": u["username"], "role": u["role"],
             "navidromeUsername": u.get("navidrome_username") or u["username"],

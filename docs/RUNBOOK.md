@@ -363,3 +363,18 @@ curl -s -H "$H" https://music-api.ault.me/v1/stream/$SONG/64/index.m3u8       # 
 docker logs continuo 2>&1 | grep 'hls:'                                         # encoded in N s
 du -sh /ssd/appdata/continuo/cache/hls
 ```
+
+**Connection samples (#123, polyphony#185 phase 2, 2026-11-12).** The phones now send what each
+~30 s of streaming was like (network kind, home or away, throughput, stalls, the HLS level) to
+`POST /v1/devices/{id}/connection`; continuo keeps them per device for 28 days
+(`connection_samples`, migration 0018, pruned on every upload) and shows them at
+`GET /v1/admin/connection?days=7[&device=…]`. This is history, but only for looking at: playback
+still follows the connection as it is now. Per-device suggestions for the stall thresholds
+(polyphony#14) will start from it. A batch is never refused for a value continuo doesn't know
+(enums are plain strings, labels cut to 64 characters): the phone resends a refused batch for
+ever, and backs off 6 h only on 404/405.
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -X POST https://music-api.ault.me/v1/devices/x/connection   # 401
+curl -s -H "$H" 'https://music-api.ault.me/v1/admin/connection?days=1' | jq '.devices[] | {name, samples, stallsPerHour, hlsLevels}'
+```
