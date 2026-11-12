@@ -104,6 +104,11 @@ def fake(monkeypatch, tmp_path):
         lim._hits.clear()
     from continuo import artwork
     artwork.reset()
+    from continuo.api import playnow as playnow_api
+    from continuo.api import scrobbling
+    scrobbling._library_cache.clear()
+    scrobbling._library_failed.clear()
+    playnow_api._scrobbled.clear()
     yield f
     http.use_transport(None)
 

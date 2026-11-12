@@ -20,6 +20,7 @@ from ..db import streams as streams_db
 from ..db import users as users_db
 from ..errors import ApiError
 from ..requests import playnow, view
+from ..search.cache import TTLCache
 
 router = APIRouter(prefix="/v1/play-now", tags=["play-now"])
 
@@ -92,12 +93,30 @@ class ScrobbleIn(BaseModel):
     listenedAt: Optional[int] = Field(None, ge=0)
 
 
-@router.post("/{stream_id}/scrobble")
+class ScrobbleOut(BaseModel):
+    sent: list[str]
+
+
+# A listen already sent, per (account, stream, listenedAt) -> the services it reached: the phone
+# resends a listen whose reply it lost, and that resend shouldn't reach a service twice.
+SCROBBLED_TTL_S = 15 * 60
+_scrobbled = TTLCache(SCROBBLED_TTL_S, max_items=2048)
+
+
+@router.post("/{stream_id}/scrobble", responses={200: {"model": ScrobbleOut}})
 async def scrobble(stream_id: str, body: ScrobbleIn, user: CurrentUser = Depends(require_user)) -> dict:
     """Scrobble a Play now song (Navidrome can't: it isn't a library song) to the account's linked
-    ListenBrainz and Last.fm. Best-effort: {sent: [services]}; a failure is logged, not an error."""
+    ListenBrainz and Last.fm. Best-effort: {sent: [services]}; a failure is logged, not an error.
+    A listen sent again (same listenedAt) only goes to the services it hasn't reached yet."""
     row = _mine(stream_id, user)
-    return {"sent": await playnow.scrobble(user.id, row, body.listenedAt)}
+    if body.listenedAt is None:                 # now playing: nothing to repeat
+        return {"sent": await playnow.scrobble(user.id, row, None)}
+    key = (user.id, stream_id, body.listenedAt)
+    done = list(_scrobbled.get(key) or [])
+    sent = done + await playnow.scrobble(user.id, row, body.listenedAt, skip=set(done))
+    if sent:
+        _scrobbled.put(key, sent)
+    return {"sent": sent}
 
 
 # A receiver (DLNA, Cast) fetches the audio itself and can't send a bearer token: it's given a link

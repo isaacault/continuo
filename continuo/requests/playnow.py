@@ -297,9 +297,10 @@ def keep(user: dict, stream_id: str) -> dict:
     return req
 
 
-async def scrobble(user_id: int, row: dict, listened_at: Optional[int]) -> list[str]:
+async def scrobble(user_id: int, row: dict, listened_at: Optional[int],
+                   skip: frozenset[str] | set[str] = frozenset()) -> list[str]:
     """Send a Play now song's listen ([listened_at]) or now-playing to the account's linked
-    services; the ones it reached."""
+    services but [skip]; the ones it reached."""
     from ..db import scrobblers
     from ..upstream import scrobble as sc
     song = {"artist": row.get("artist") or "", "title": row.get("title") or "", "durationMs": row.get("duration_ms"),
@@ -308,6 +309,8 @@ async def scrobble(user_id: int, row: dict, listened_at: Optional[int]) -> list[
         return []
     sent = []
     for service, link in scrobblers.all_for(user_id).items():
+        if service in skip:
+            continue
         try:
             if service == "listenbrainz":
                 await sc.listenbrainz(link["secret"], song, listened_at)
