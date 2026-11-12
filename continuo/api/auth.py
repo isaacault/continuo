@@ -6,11 +6,12 @@ from fastapi import APIRouter, Depends, Request
 from .. import config
 from ..auth import facade, passwords, tokens
 from ..auth.deps import CurrentUser, require_user
+from ..db import connection_samples
 from ..db import devices as devices_db
 from ..db import users as users_db
 from ..errors import ApiError
 from ..ratelimit import client_ip, login_limiter
-from .schemas import LoginIn, PasswordChange, PushIn, RefreshIn
+from .schemas import ConnectionIn, LoginIn, PasswordChange, PushIn, RefreshIn
 
 log = logging.getLogger("continuo")
 router = APIRouter(prefix="/v1", tags=["auth"])
@@ -171,3 +172,16 @@ async def set_push(device_id: str, body: PushIn, user: CurrentUser = Depends(req
         raise ApiError(404, "not_found", "Device not found.")
     devices_db.set_push(device_id, body.kind, body.endpoint)
     return {"ok": True}
+
+
+@router.post("/devices/{device_id}/connection")
+async def add_connection_samples(device_id: str, body: ConnectionIn,
+                                 user: CurrentUser = Depends(require_user)) -> dict:
+    """Keep this device's connection samples (polyphony#185 phase 2): how streaming went, ~30 s
+    each, for GET /v1/admin/connection. The phone keeps a per-server "sent through" mark and never
+    resends what was taken, so 2xx means stored. 404: not the caller's device."""
+    d = devices_db.get(device_id)
+    if d is None or d["user_id"] != user.id:
+        raise ApiError(404, "not_found", "Device not found.")
+    stored = connection_samples.add(device_id, [s.model_dump() for s in body.samples])
+    return {"ok": True, "stored": stored}

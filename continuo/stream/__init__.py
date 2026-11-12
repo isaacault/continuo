@@ -7,5 +7,6 @@ connection changes, and keep albums gapless.
 * encoder.py — ffmpeg from Navidrome's original file, the disk cache, how many encode at once.
 
 The phone measures its connection and picks the level; continuo encodes what it asks for, and the
-songs coming up next in its queue, ahead. Nothing about past connections is kept.
+songs coming up next in its queue, ahead. Nothing about past connections decides anything; the
+phones' connection samples are kept for looking at (connection.py, GET /v1/admin/connection).
 """
