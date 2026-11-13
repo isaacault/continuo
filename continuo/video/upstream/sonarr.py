@@ -183,10 +183,11 @@ async def _add(tvdb_id: int, flags: list[int] | None, future: bool, anime: bool,
 
 
 async def replace(series_id: int, seasons: list[int] | None, picks: list[dict] | None, future: bool,
-                  delete_files: bool = False) -> dict:
+                  delete_files: bool = False, removed: set[tuple[int, int]] | None = None) -> dict:
     """Changes what a series in Sonarr is wanted for to exactly this selection: seasons and episodes
     monitored as asked and nothing else, downloads of anything else stopped, the newly wanted
-    searched. delete_files: also deletes the files of episodes no longer wanted. Returns counts."""
+    searched. delete_files: also deletes the files of episodes no longer wanted. removed: episodes
+    deleted on purpose, (season, episode), never wanted again. Returns counts."""
     show = await series(series_id)
     flags = season_flags(seasons, picks)
     show = {**show, "monitored": True, "monitorNewItems": "all" if future else "none",
@@ -195,7 +196,7 @@ async def replace(series_id: int, seasons: list[int] | None, picks: list[dict] |
     r = await _client().put(f"/series/{series_id}", json=show)
     r.raise_for_status()
     eps = await episodes(series_id)
-    want = selected(eps, seasons, picks)
+    want = selected(eps, seasons, picks) - {e["id"] for e in eps if (e.get("seasonNumber"), e.get("episodeNumber")) in (removed or set())}
     unwanted = {e["id"] for e in eps} - want
     await _monitor(want, True)
     await _monitor(unwanted, False)
@@ -223,6 +224,25 @@ async def replace(series_id: int, seasons: list[int] | None, picks: list[dict] |
     gaps = sorted({e["seasonNumber"] for e in eps if e["id"] in missing and e.get("seasonNumber") in whole})
     await _search(series_id, eps, gaps, missing)
     return {"stoppedDownloads": stopped, "deletedFiles": deleted}
+
+
+async def delete_episodes(series_id: int, season: int, numbers: set[int] | None) -> list[tuple[int, int]]:
+    """Deletes a season's episodes (numbers; None: the whole season) from the library: their files
+    deleted and the episodes no longer wanted, so they aren't fetched again. A whole season stops
+    being wanted too, so its later episodes don't come either. A file holding another episode as
+    well (a double episode) goes, and that episode with it. Returns what went, (season, episode)."""
+    if numbers is None:
+        await unmonitor_season(series_id, season)
+    eps = await episodes(series_id)
+    target = [e for e in eps if e.get("seasonNumber") == season and (numbers is None or e.get("episodeNumber") in numbers)]
+    files = {e["episodeFileId"] for e in target if e.get("episodeFileId")}
+    going = target + [e for e in eps if e.get("episodeFileId") in files and e not in target]
+    await _monitor({e["id"] for e in going}, False)
+    for file_id in sorted(files):
+        d = await _client().delete(f"/episodefile/{file_id}")
+        if d.status_code != 404:
+            d.raise_for_status()
+    return sorted((e["seasonNumber"], e["episodeNumber"]) for e in going if e.get("episodeFileId") or e in target)
 
 
 async def series(series_id: int) -> dict:

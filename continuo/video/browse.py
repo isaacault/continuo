@@ -2,6 +2,7 @@
 watched/unwatched (docs/design/video.md §7). Titles come back as the search's hits, each marked with
 what's in the library and what's requested."""
 import asyncio
+import logging
 
 import httpx
 from fastapi import APIRouter, Depends, Path, Query
@@ -12,6 +13,8 @@ from ..errors import ApiError
 from . import mylist
 from .api import _hit, _image, _jellyfin_user, _tmdb, availability
 from .upstream import tmdb
+
+log = logging.getLogger("continuo")
 
 router = APIRouter(prefix="/v1/video", tags=["video"])
 Kind = Path(..., pattern="^(movie|series)$")
@@ -75,6 +78,66 @@ async def remove_from_library(kind: str = Kind, tmdb_id: int = Path(..., ge=1), 
         if r["kind"] == kind and r["tmdb_id"] == tmdb_id:
             db.delete(r["id"])
     return {"removed": True, "via": via}
+
+
+@router.delete("/library/series/{tmdb_id}/seasons/{season}")
+async def remove_season(tmdb_id: int = Path(..., ge=1), season: int = Path(..., ge=0),
+                        user: CurrentUser = Depends(require_user)) -> dict:
+    """Deletes a season of a series from the library, files and all; Sonarr stops wanting it."""
+    return await _remove_episodes(tmdb_id, season, None, user)
+
+
+@router.delete("/library/series/{tmdb_id}/seasons/{season}/episodes/{episode}")
+async def remove_episode(tmdb_id: int = Path(..., ge=1), season: int = Path(..., ge=0), episode: int = Path(..., ge=1),
+                         user: CurrentUser = Depends(require_user)) -> dict:
+    """Deletes one episode from the library (watched, say); Sonarr doesn't fetch it again."""
+    return await _remove_episodes(tmdb_id, season, {episode}, user)
+
+
+async def _remove_episodes(tmdb_id: int, season: int, numbers: set[int] | None, user: CurrentUser) -> dict:
+    """Through Sonarr when it has the series (files deleted, episodes unwanted, the requests told,
+    then Jellyfin rescans the series), through Jellyfin otherwise."""
+    from .. import config
+    from . import db, index
+    from . import requests as pipeline
+    from .upstream import jellyfin, sonarr
+    if not may_remove(user):
+        raise ApiError(403, "forbidden", "Only an admin can delete from the library here.")
+    item = index.by_tmdb("series", tmdb_id)
+    gone: list[tuple[int, int]] = []
+    via = None
+    try:
+        if config.settings.sonarr_api_key:
+            tvdb = ((await _tmdb(tmdb.series(tmdb_id))).get("external_ids") or {}).get("tvdb_id")
+            show = await sonarr.find(int(tvdb)) if tvdb else None
+            if show:
+                gone = await sonarr.delete_episodes(show["id"], season, numbers)
+                via = "sonarr"
+                all_seasons = [x["seasonNumber"] for x in show.get("seasons") or [] if x.get("seasonNumber")]
+                for r in db.for_user(None):
+                    if r["kind"] == "series" and r["tmdb_id"] == tmdb_id and r["status"] != "failed":
+                        fields = pipeline.forget_episodes(r, season, numbers is None, gone, all_seasons)
+                        if fields is None:
+                            db.delete(r["id"])
+                        else:
+                            db.update(r["id"], **fields)
+        if via is None:
+            eps = [e for e in await jellyfin.episodes(item["jellyfin_id"], season=season)
+                   if numbers is None or e["episode"] in numbers] if item else []
+            if not eps:
+                raise ApiError(404, "not_found", "That isn't in the library.")
+            for e in eps:
+                await jellyfin.delete_item(e["jellyfinId"])
+            gone = [(season, e["episode"]) for e in eps]
+            via = "jellyfin"
+    except httpx.HTTPError as e:
+        raise ApiError(502, "upstream_unavailable", "Sonarr or Jellyfin didn't answer: nothing more was deleted.", True) from e
+    if via == "sonarr" and item:
+        try:
+            await jellyfin.refresh_item(item["jellyfin_id"])
+        except httpx.HTTPError as e:
+            log.warning("series %s: Jellyfin's rescan after deleting episodes failed: %s", tmdb_id, e)
+    return {"removed": True, "via": via, "episodes": [{"season": s, "episode": n} for s, n in gone]}
 
 
 @router.get("/browse")

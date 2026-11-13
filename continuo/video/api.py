@@ -309,7 +309,8 @@ def _request_out(r: dict) -> dict:
             "jellyfinId": r.get("jellyfin_id"), "createdAt": r["created_at"], "availableAt": r.get("available_at"),
             "seasons": json.loads(r["seasons"]) if r.get("seasons") else None,
             "episodes": json.loads(r["episodes"]) if r.get("episodes") else None,
-            "future": r.get("future") is None or bool(r["future"])}
+            "future": r.get("future") is None or bool(r["future"]),
+            "removed": json.loads(r["removed"]) if r.get("removed") else []}
 
 
 @router.get("/requests")
@@ -374,7 +375,9 @@ async def change_request(request_id: int, body: SelectionIn, user: CurrentUser =
         raise ApiError(400, "nothing_asked", "Pick at least one season or episode, or delete the request instead.")
     seasons = whole or []
     try:
-        done = await sonarr.replace(req["sonarr_series_id"], seasons, picks, body.future, delete_files=body.deleteFiles)
+        removed = {tuple(x) for x in json.loads(req["removed"])} if req.get("removed") else set()
+        done = await sonarr.replace(req["sonarr_series_id"], seasons, picks, body.future, delete_files=body.deleteFiles,
+                                    removed=removed)
     except httpx.HTTPError as e:
         raise ApiError(503, "sonarr_unavailable", f"Sonarr: {e}", True) from e
     db.update(request_id, seasons=json.dumps(seasons), episodes=json.dumps(picks) if picks else None,
