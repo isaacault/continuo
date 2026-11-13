@@ -170,11 +170,24 @@ async def receiver_link(stream_id: str, user: CurrentUser = Depends(require_user
 
 
 @router.get("/{stream_id}/audio")
-async def audio(stream_id: str, request: Request, user: CurrentUser = Depends(_audio_user)):
+async def audio(stream_id: str, request: Request, user: CurrentUser = Depends(_audio_user),
+                as_: Optional[str] = Query(None, alias="as", pattern="^(flac|mp3)$")):
     """The song's audio, served while it downloads: the full length is announced (the copy's size
     on Soulseek), and a read past what's on disk waits for the download (up to 30 s without a new
-    byte). Range requests work, so the player can seek."""
+    byte). Range requests work, so the player can seek.
+
+    `as` (flac or mp3) is for a speaker that can't play the copy's format (the Yamaha has no Opus
+    decoder): a copy in another format is served converted, once its download has finished (the
+    request waits for it); one already in that format is served as it is. Outside the signature:
+    it changes the encoding, not what the link grants."""
     row = _mine(stream_id, user)
+    if as_ and not playnow.same_format(row.get("extension"), as_):
+        if row["status"] == "failed":
+            raise ApiError(409, "not_ready", "Not playable.")
+        converted = await playnow.converted_path(stream_id, as_)
+        if not converted:
+            raise ApiError(502, "not_converted", f"Couldn't make a {as_} copy of it.")
+        return _serve(request, stream_id, converted, os.path.getsize(converted), _TYPES[as_], follow=False)
     if row["status"] not in ("streaming", "ready"):
         raise ApiError(409, "not_ready", "Not playable yet.")
     size = row.get("size") or 0
@@ -183,6 +196,13 @@ async def audio(stream_id: str, request: Request, user: CurrentUser = Depends(_a
         raise ApiError(410, "gone", "That song is no longer cached.")
     if row["status"] == "ready" or not size:
         size = os.path.getsize(path)
+    media = _TYPES.get((row.get("extension") or "").lower(), "application/octet-stream")
+    return _serve(request, stream_id, path, size, media, follow=row["status"] != "ready")
+
+
+def _serve(request: Request, stream_id: str, path: str, size: int, media: str, follow: bool):
+    """`path` as `size` bytes, with ranges. `follow`: it's still downloading, so a read past its
+    end waits for more bytes and follows the file when it moves to the cache."""
     start, end = 0, size - 1
     m = re.match(r"bytes=(\d*)-(\d*)$", request.headers.get("range", ""))
     if m and (m.group(1) or m.group(2)):
@@ -193,7 +213,6 @@ async def audio(stream_id: str, request: Request, user: CurrentUser = Depends(_a
             start = max(0, size - int(m.group(2)))
         if start >= size:
             raise ApiError(416, "range", "Out of range.")
-    media = _TYPES.get((row.get("extension") or "").lower(), "application/octet-stream")
     headers = {"Accept-Ranges": "bytes", "Content-Length": str(end - start + 1)}
     if m:
         headers["Content-Range"] = f"bytes {start}-{end}/{size}"
@@ -212,7 +231,7 @@ async def audio(stream_id: str, request: Request, user: CurrentUser = Depends(_a
                     yield chunk
                     continue
                 # At the end of what's on disk: wait for the download (or its move to the cache).
-                if idle >= _STALL_S:
+                if not follow or idle >= _STALL_S:
                     return
                 await asyncio.sleep(0.25)
                 idle += 0.25

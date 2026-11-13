@@ -145,6 +145,61 @@ def audio_path(row: dict) -> Optional[str]:
     return _downloaded_path(_candidate(row)) or _partial_path(row)
 
 
+# A speaker that can't play the copy's own format (the Yamaha RX-V483 has no Opus decoder, and
+# Play now takes the quickest copy, often Opus) asks for one of these: ffmpeg's codec arguments.
+CONVERSIONS = {"flac": ["-c:a", "flac"], "mp3": ["-c:a", "libmp3lame", "-b:a", "320k"]}
+# A conversion is made from the finished download; a speaker asking earlier waits this long for it.
+CONVERT_WAIT_S = 90.0
+_converting: dict[str, asyncio.Lock] = {}
+
+
+def same_format(extension: Optional[str], fmt: str) -> bool:
+    return (extension or "").lower().lstrip(".") == fmt
+
+
+async def _ffmpeg(args: list[str]) -> tuple[int, bytes]:
+    proc = await asyncio.create_subprocess_exec(config.settings.ffmpeg_path, *args,
+                                                stdout=asyncio.subprocess.DEVNULL,
+                                                stderr=asyncio.subprocess.PIPE)
+    _, err = await proc.communicate()
+    return proc.returncode or 0, err
+
+
+async def converted_path(stream_id: str, fmt: str) -> Optional[str]:
+    """The stream's audio as `fmt` (a key of CONVERSIONS), for a speaker that can't play the copy
+    as it is: made once by ffmpeg from the finished download (audio only, no tags, so nothing
+    trails the audio at a gapless hand-off), kept beside the cached copy. Waits up to
+    CONVERT_WAIT_S for the download to finish; None when it fails or can't be made."""
+    deadline = asyncio.get_running_loop().time() + CONVERT_WAIT_S
+    row = streams_db.get(stream_id)
+    while row and row["status"] != "ready":
+        if row["status"] == "failed" or asyncio.get_running_loop().time() > deadline:
+            return None
+        await asyncio.sleep(0.25)
+        row = streams_db.get(stream_id)
+    src = _cached_path(row) if row else None
+    if not src:
+        return None
+    out = f"{os.path.splitext(src)[0]}.speaker.{fmt}"
+    lock = _converting.setdefault(out, asyncio.Lock())
+    async with lock:                            # a speaker asking twice gets one conversion
+        if not os.path.isfile(out):
+            part = out + ".part"
+            code, err = await _ffmpeg(["-nostdin", "-v", "error", "-y", "-i", src, "-map", "0:a:0",
+                                       "-map_metadata", "-1", *CONVERSIONS[fmt], "-f", fmt, part])
+            if code or not os.path.isfile(part):
+                log.warning("play now %s: converting to %s failed: %s", stream_id, fmt,
+                            err.decode(errors="replace").strip()[-300:])
+                if os.path.exists(part):
+                    os.remove(part)
+                return None
+            os.replace(part, out)
+            log.info("play now %s: converted %s to %s for a speaker", stream_id, row.get("extension"), fmt)
+    if not lock.locked():
+        _converting.pop(out, None)
+    return out
+
+
 async def _run(stream_id: str) -> None:
     try:
         await _fetch(stream_id)

@@ -2,6 +2,7 @@
 import asyncio
 import dataclasses
 import os
+import shutil
 
 import pytest
 from conftest import bearer, login, make_user
@@ -375,3 +376,111 @@ def test_an_expired_receiver_link_is_refused(client, world):
     device = s["device"]["id"]
     sig = api._signature(row["id"], device, 1000)
     assert client.get(f"/v1/play-now/{row['id']}/audio?d={device}&exp=1000&sig={sig}").status_code == 401
+
+
+def _ready(client, world):
+    """A finished Play now copy in the cache, and a session to fetch it with."""
+    isaac = make_user()
+
+    def done(c):
+        _finished(world, _downloading(world))
+        return {"state": "Completed, Succeeded", "id": "t1"}
+    world["state"]["transfer"]["alice"] = done
+    row = _run(isaac["id"])
+    assert row["status"] == "ready"
+    return row, login(client)
+
+
+def test_a_speaker_gets_a_copy_it_can_play_converted_once(client, world, monkeypatch):
+    """The Yamaha has no Opus decoder and Play now often takes an Opus copy: `as=flac` converts it."""
+    row, s = _ready(client, world)
+    streams_db.update(row["id"], extension="opus")
+    calls = []
+    converted = b"fLaC" + b"\x01" * 4000
+
+    async def ffmpeg(args):
+        calls.append(args)
+        with open(args[-1], "wb") as f:
+            f.write(converted)
+        return 0, b""
+    monkeypatch.setattr(playnow, "_ffmpeg", ffmpeg)
+    out = client.get(f"/v1/play-now/{row['id']}/audio?as=flac", headers=bearer(s))
+    assert out.status_code == 200 and out.content == converted
+    assert out.headers["content-type"] == "audio/flac" and out.headers["content-length"] == str(len(converted))
+    part = client.get(f"/v1/play-now/{row['id']}/audio?as=flac", headers={**bearer(s), "Range": "bytes=10-19"})
+    assert part.status_code == 206 and part.content == converted[10:20]
+    assert part.headers["content-range"] == f"bytes 10-19/{len(converted)}"
+    assert len(calls) == 1, "converted once, then served from the cache"
+    args = calls[0]
+    assert args[args.index("-i") + 1] == playnow.audio_path(streams_db.get(row["id"]))
+    assert "-map_metadata" in args and args[args.index("-c:a") + 1] == "flac"
+    plain = client.get(f"/v1/play-now/{row['id']}/audio", headers=bearer(s))
+    assert plain.content == AUDIO, "without `as`, the copy as it is"
+
+
+def test_a_copy_already_in_the_asked_format_is_not_converted(client, world, monkeypatch):
+    row, s = _ready(client, world)
+
+    async def ffmpeg(args):
+        raise AssertionError("no conversion for a FLAC copy asked for as FLAC")
+    monkeypatch.setattr(playnow, "_ffmpeg", ffmpeg)
+    out = client.get(f"/v1/play-now/{row['id']}/audio?as=flac", headers=bearer(s))
+    assert out.status_code == 200 and out.content == AUDIO
+
+
+def test_a_conversion_that_fails_is_an_error_not_silence(client, world, monkeypatch):
+    row, s = _ready(client, world)
+    streams_db.update(row["id"], extension="opus")
+
+    async def ffmpeg(args):
+        return 1, b"Invalid data found when processing input"
+    monkeypatch.setattr(playnow, "_ffmpeg", ffmpeg)
+    out = client.get(f"/v1/play-now/{row['id']}/audio?as=flac", headers=bearer(s))
+    assert out.status_code == 502
+    assert client.get(f"/v1/play-now/{row['id']}/audio?as=ogg", headers=bearer(s)).status_code == 422
+
+
+def test_a_speaker_waits_for_the_download_before_its_conversion(client, world, monkeypatch):
+    """Asked for while the copy still downloads: the conversion waits for the finished file."""
+    isaac = make_user()
+    row = streams_db.create("sid-wait", isaac["id"], REC, RG, "Drop the Guillotine", "Peach Pit", None)
+    streams_db.update(row["id"], status="downloading", username="alice", filename=REMOTE, size=len(AUDIO),
+                      extension="opus")
+    seen = {}
+
+    async def converted_path(stream_id, fmt):
+        seen["asked"] = (stream_id, fmt)
+        return None
+    monkeypatch.setattr(playnow, "converted_path", converted_path)
+    out = client.get(f"/v1/play-now/{row['id']}/audio?as=flac", headers=bearer(login(client)))
+    assert seen["asked"] == ("sid-wait", "flac"), "not refused as not ready: it waits for the download"
+    assert out.status_code == 502
+
+
+def test_convert_waits_for_ready_and_gives_up_on_failure(world, monkeypatch):
+    isaac = make_user()
+    row = streams_db.create("sid-fail", isaac["id"], REC, RG, "Song", "A", None)
+    streams_db.update(row["id"], status="downloading")
+
+    async def go():
+        async def fail_soon():
+            await asyncio.sleep(0.3)
+            streams_db.update(row["id"], status="failed")
+        asyncio.get_running_loop().create_task(fail_soon())
+        return await playnow.converted_path(row["id"], "flac")
+    assert asyncio.run(go()) is None
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg isn't installed")
+def test_a_real_conversion_is_playable_audio(client, world, tmp_path):
+    """ffmpeg's arguments, for real: a FLAC copy asked for as MP3 comes back as MPEG audio."""
+    import subprocess
+    row, s = _ready(client, world)
+    src = playnow.audio_path(streams_db.get(row["id"]))
+    subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=1",
+                    "-c:a", "flac", "-f", "flac", src], check=True)
+    out = client.get(f"/v1/play-now/{row['id']}/audio?as=mp3", headers=bearer(s))
+    assert out.status_code == 200 and out.headers["content-type"] == "audio/mpeg"
+    body = out.content
+    assert body[:3] == b"ID3" or (body[0] == 0xFF and body[1] & 0xE0 == 0xE0)
+    assert len(body) > 4000
