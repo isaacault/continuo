@@ -239,3 +239,102 @@ def test_named_accounts_may_delete_without_being_admins(vclient, fake):
     assert vclient.get("/v1/video/settings", headers=bearer(login(vclient))).json()["canRemove"] is True
     assert vclient.get("/v1/video/settings", headers=bearer(login(vclient, username="caleb"))).json()["canRemove"] is False
     assert vclient.delete("/v1/video/library/movie/1", headers=bearer(login(vclient, username="caleb"))).status_code == 403
+
+
+# --- deleting a season or an episode --------------------------------------------------------------
+
+S4 = [  # season 4 in Sonarr: E1 and E2 one file (a double episode), E3 its own, E4 still to come
+    {"id": 41, "seasonNumber": 4, "episodeNumber": 1, "episodeFileId": 401},
+    {"id": 42, "seasonNumber": 4, "episodeNumber": 2, "episodeFileId": 401},
+    {"id": 43, "seasonNumber": 4, "episodeNumber": 3, "episodeFileId": 403},
+    {"id": 44, "seasonNumber": 4, "episodeNumber": 4, "episodeFileId": 0},
+    {"id": 51, "seasonNumber": 5, "episodeNumber": 1, "episodeFileId": 501},
+]
+
+
+def _sonarr_series(fake):
+    config.reload(dict(os.environ, CONTINUO_MODULES="music,video", JELLYFIN_URL=JELLYFIN, JELLYFIN_API_KEY="jf", TMDB_API_KEY="tm",
+                       SONARR_URL="http://sonarr.test", SONARR_API_KEY="so"))
+    _library(fake, [{"Id": "jf-bb", "Name": "Breaking Bad", "Type": "Series", "ProviderIds": {"Tmdb": "1396"}}])
+    fake.on("GET", f"{TMDB}/tv/1396", BB | {"external_ids": {"tvdb_id": 81189}})
+    show = {"id": 5, "tvdbId": 81189, "seasons": [{"seasonNumber": 0}, {"seasonNumber": 4, "monitored": True}, {"seasonNumber": 5, "monitored": True}]}
+    fake.on("GET", f"{SONARR}/series", [show])
+    fake.on("GET", f"{SONARR}/series/5", show)
+    fake.on("PUT", f"{SONARR}/series/5", handler=lambda r: fake.body(r))
+    fake.on("GET", f"{SONARR}/episode", S4)
+    fake.on("PUT", f"{SONARR}/episode/monitor", [])
+    for f in (401, 403, 501):
+        fake.on("DELETE", f"{SONARR}/episodefile/{f}", {})
+    fake.on("POST", f"{JELLYFIN}/Items/jf-bb/Refresh", handler=lambda r: httpx.Response(204))
+
+
+def test_deleting_an_episode_deletes_its_file_and_sonarr_stops_wanting_it(vclient, fake):
+    from continuo.video import db
+    _sonarr_series(fake)
+    uid = make_user()["id"]
+    req = db.create(kind="series", tmdb_id=1396, title="Breaking Bad", year=2008, poster_path=None, user_id=uid)
+    db.update(req["id"], status="available", sonarr_series_id=5)
+    s = login(vclient)
+    r = vclient.delete("/v1/video/library/series/1396/seasons/4/episodes/3", headers=bearer(s))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"removed": True, "via": "sonarr", "episodes": [{"season": 4, "episode": 3}]}
+    assert [fake.body(c) for c in fake.called("PUT", f"{SONARR}/episode/monitor")] == [{"episodeIds": [43], "monitored": False}]
+    assert fake.called("DELETE", f"{SONARR}/episodefile/403") and not fake.called("DELETE", f"{SONARR}/episodefile/401")
+    assert not fake.called("PUT", f"{SONARR}/series/5"), "the season stays wanted: its later episodes still come"
+    assert fake.called("POST", f"{JELLYFIN}/Items/jf-bb/Refresh")[0].url.params["Recursive"] == "true", "Jellyfin rescans"
+    assert db.get(req["id"])["removed"] == "[[4, 3]]", "the request remembers: a change won't fetch it again"
+    # A double episode's file holds two: both go.
+    r = vclient.delete("/v1/video/library/series/1396/seasons/4/episodes/1", headers=bearer(s))
+    assert r.json()["episodes"] == [{"season": 4, "episode": 1}, {"season": 4, "episode": 2}]
+    assert fake.called("DELETE", f"{SONARR}/episodefile/401")
+
+
+def test_deleting_a_season_unwants_it_and_leaves_the_request(vclient, fake):
+    from continuo.video import db
+    _sonarr_series(fake)
+    uid = make_user()["id"]
+    everything = db.create(kind="series", tmdb_id=1396, title="Breaking Bad", year=2008, poster_path=None, user_id=uid)
+    db.update(everything["id"], status="available", sonarr_series_id=5)
+    only_s4 = db.create(kind="series", tmdb_id=1396, title="Breaking Bad", year=2008, poster_path=None, user_id=uid,
+                        seasons=[4], future=False)
+    s = login(vclient)
+    r = vclient.delete("/v1/video/library/series/1396/seasons/4", headers=bearer(s))
+    assert r.status_code == 200, r.text
+    assert [(e["season"], e["episode"]) for e in r.json()["episodes"]] == [(4, 1), (4, 2), (4, 3), (4, 4)]
+    put = fake.body(fake.called("PUT", f"{SONARR}/series/5")[0])
+    assert [(x["seasonNumber"], x.get("monitored")) for x in put["seasons"]] == [(0, None), (4, False), (5, True)]
+    assert {f"{SONARR}/episodefile/{f}" for f in (401, 403)} == {str(c.url) for c in fake.calls if c.method == "DELETE"}
+    assert db.get(everything["id"])["seasons"] == "[5]", "every season but the deleted one"
+    assert db.get(only_s4["id"]) is None, "asked for that season only, and no new ones: nothing left"
+
+
+def test_deleting_an_episode_sonarr_doesnt_have_goes_through_jellyfin(vclient, fake):
+    config.reload(dict(os.environ, CONTINUO_MODULES="music,video", JELLYFIN_URL=JELLYFIN, JELLYFIN_API_KEY="jf", TMDB_API_KEY="tm"))
+    _library(fake, [{"Id": "jf-bb", "Name": "Breaking Bad", "Type": "Series", "ProviderIds": {"Tmdb": "1396"}}])
+    fake.on("GET", f"{JELLYFIN}/Shows/jf-bb/Episodes", {"Items": [{"Id": "e2", "ParentIndexNumber": 1, "IndexNumber": 2},
+                                                                  {"Id": "e3", "ParentIndexNumber": 1, "IndexNumber": 3}]})
+    fake.on("DELETE", f"{JELLYFIN}/Items/e2", handler=lambda r: httpx.Response(204))
+    make_user()
+    s = login(vclient)
+    r = vclient.delete("/v1/video/library/series/1396/seasons/1/episodes/2", headers=bearer(s))
+    assert r.json() == {"removed": True, "via": "jellyfin", "episodes": [{"season": 1, "episode": 2}]}
+    assert fake.called("DELETE", f"{JELLYFIN}/Items/e2") and not fake.called("DELETE", f"{JELLYFIN}/Items/e3")
+    assert vclient.delete("/v1/video/library/series/1396/seasons/1/episodes/9", headers=bearer(s)).status_code == 404
+    make_user(username="caleb", role="user")
+    assert vclient.delete("/v1/video/library/series/1396/seasons/1", headers=bearer(login(vclient, username="caleb"))).status_code == 403
+
+
+def test_a_changed_request_never_fetches_deleted_episodes_again(vclient, fake):
+    from continuo.video import db
+    _sonarr_series(fake)
+    fake.on("GET", f"{SONARR}/queue/details", [])
+    fake.on("POST", f"{SONARR}/command", {"id": 1})
+    uid = make_user()["id"]
+    req = db.create(kind="series", tmdb_id=1396, title="Breaking Bad", year=2008, poster_path=None, user_id=uid)
+    db.update(req["id"], status="available", sonarr_series_id=5, removed="[[4, 3]]")
+    s = login(vclient)
+    r = vclient.put(f"/v1/video/requests/{req['id']}", headers=bearer(s), json={"seasons": [4]})
+    assert r.status_code == 200, r.text
+    assert r.json()["request"]["removed"] == [[4, 3]]
+    monitor = [fake.body(c) for c in fake.called("PUT", f"{SONARR}/episode/monitor")]
+    assert monitor[0] == {"episodeIds": [41, 42, 44], "monitored": True} and 43 in monitor[1]["episodeIds"]

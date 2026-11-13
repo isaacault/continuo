@@ -183,6 +183,15 @@ async def latest(user_id: str, limit: int = 16) -> list[dict]:
     return [summarize(i) for i in r.json().get("Items") or []]
 
 
+async def refresh_item(item_id: str) -> None:
+    """Rescans an item and what's under it (a series: its episodes), so files deleted elsewhere
+    (by Sonarr) leave the library."""
+    r = await _client().post(f"/Items/{item_id}/Refresh", params={"Recursive": "true", "MetadataRefreshMode": "Default",
+                                                                  "ImageRefreshMode": "Default"})
+    if r.status_code != 404:
+        r.raise_for_status()
+
+
 async def delete_item(item_id: str) -> None:
     """Deletes the item and its files (Jellyfin's own delete, with the server's key)."""
     r = await _client().delete(f"/Items/{item_id}")

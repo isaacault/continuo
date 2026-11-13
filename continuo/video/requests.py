@@ -68,6 +68,27 @@ def asked_seasons(req: dict) -> list[int] | None:
     return sorted(set(seasons or []) | {p["season"] for p in picks or []})
 
 
+def forget_episodes(req: dict, season: int, whole: bool, gone: list[tuple[int, int]], all_seasons: list[int]) -> dict | None:
+    """A series request after episodes were deleted from the library: they go on its removed list
+    (never fetched again), and a deleted season leaves what it asks for. The fields to update, or
+    None when it asks for nothing any more (no seasons, no episodes, no new seasons)."""
+    import json
+    removed = {tuple(x) for x in json.loads(req["removed"])} if req.get("removed") else set()
+    removed |= set(gone)
+    fields: dict = {"removed": json.dumps(sorted(removed))}
+    if whole:
+        seasons = json.loads(req["seasons"]) if req.get("seasons") else None
+        picks = json.loads(req["episodes"]) if req.get("episodes") else None
+        if seasons is None and not picks:
+            seasons = [n for n in all_seasons if n > 0]
+        seasons = [n for n in seasons or [] if n != season]
+        picks = [p for p in picks or [] if p["season"] != season]
+        if not seasons and not picks and req.get("future") is not None and not req["future"]:
+            return None
+        fields |= {"seasons": json.dumps(seasons), "episodes": json.dumps(picks) if picks else None}
+    return fields
+
+
 async def _tick_series(req: dict, refreshed: list) -> None:
     if not req["sonarr_series_id"]:
         return
