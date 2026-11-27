@@ -60,6 +60,9 @@ class Settings:
     jwt_secret: str = ""
     access_token_ttl: int = 3600
     refresh_token_ttl_days: int = 90
+    # A refresh token presented again this soon after it was rotated is a retry of a refresh whose
+    # reply was lost (#129), not theft: the device gets a new token instead of being revoked.
+    refresh_reuse_grace_seconds: int = 60
     admin_user: str = ""
     admin_password: str = ""
     login_rate_limit_attempts: int = 10
@@ -290,6 +293,7 @@ def load(env: dict | None = None) -> Settings:
         jwt_secret=_resolve_jwt_secret(e, db_path),
         access_token_ttl=_int(e, "ACCESS_TOKEN_TTL", 3600),
         refresh_token_ttl_days=_int(e, "REFRESH_TOKEN_TTL_DAYS", 90),
+        refresh_reuse_grace_seconds=_int(e, "REFRESH_REUSE_GRACE_SECONDS", 60),
         admin_user=_str(e, "ADMIN_USER"),
         admin_password=_str(e, "ADMIN_PASSWORD"),
         login_rate_limit_attempts=_int(e, "LOGIN_RATE_LIMIT_ATTEMPTS", 10),

@@ -81,6 +81,7 @@ async def refresh(body: RefreshIn) -> dict:
 @router.post("/auth/logout")
 async def logout(user: CurrentUser = Depends(require_user)) -> dict:
     devices_db.revoke(user.device_id)
+    log.info("logout: %s signed device %s out", user.username, user.device_id)
     facade.invalidate(user.username)
     from .. import modules
     await modules.device_signed_out(user.device_id)

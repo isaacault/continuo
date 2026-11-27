@@ -45,7 +45,70 @@ def test_login_rate_limited(client):
     assert r.status_code == 429
 
 
-def test_refresh_rotates_and_reuse_revokes_device(client):
+def _later(monkeypatch, seconds: int) -> None:
+    """Move continuo's token clock forward (the grace window is measured with it)."""
+    from datetime import datetime, timedelta, timezone
+
+    from continuo.auth import tokens
+    shifted = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    monkeypatch.setattr(tokens, "_now", lambda: shifted)
+
+
+def test_refresh_retried_after_a_lost_reply_keeps_the_device(client, caplog):
+    """#129: the phone's refresh reached continuo but the reply didn't reach the phone, so it
+    retries with the token it still has. That is a retry, not theft: the device stays signed in."""
+    make_user()
+    s = login(client)
+    lost = client.post("/v1/auth/refresh", json={"refreshToken": s["refreshToken"]}).json()
+    retry = client.post("/v1/auth/refresh", json={"refreshToken": s["refreshToken"]})
+    assert retry.status_code == 200
+    s2 = retry.json()
+    assert s2["refreshToken"] not in (s["refreshToken"], lost["refreshToken"])
+    assert s2["device"]["id"] == s["device"]["id"]
+    assert s2["library"]["password"] == s["library"]["password"]   # playback keeps working
+    assert client.get("/v1/me", headers=bearer(s2)).status_code == 200
+    # The retry's token goes on rotating as usual; the original token is dead now.
+    s3 = client.post("/v1/auth/refresh", json={"refreshToken": s2["refreshToken"]})
+    assert s3.status_code == 200
+    r = client.post("/v1/auth/refresh", json={"refreshToken": s["refreshToken"]})
+    assert r.status_code == 401 and r.json()["error"]["code"] == "invalid_refresh_token"
+    assert client.get("/v1/me", headers=bearer(s3.json())).status_code == 200
+    assert "retried a refresh" in caplog.text
+
+
+def test_reused_refresh_token_after_the_window_revokes_and_says_so(client, monkeypatch, caplog):
+    make_user()
+    s = login(client, device="Pixel")
+    s2 = client.post("/v1/auth/refresh", json={"refreshToken": s["refreshToken"]}).json()
+    _later(monkeypatch, seconds=61)
+    r = client.post("/v1/auth/refresh", json={"refreshToken": s["refreshToken"]})
+    assert r.status_code == 401 and r.json()["error"]["code"] == "refresh_token_reused"
+    assert client.get("/v1/me", headers=bearer(s2)).json()["error"]["code"] == "device_revoked"
+    assert any(rec.levelname == "WARNING" and s["device"]["id"] in rec.getMessage()
+               and "Pixel" in rec.getMessage() for rec in caplog.records)
+
+
+def test_a_device_without_a_recorded_rotation_has_no_grace(client):
+    """Devices refreshed before the migration have no refresh_rotated_at: reuse still revokes."""
+    from continuo.db.conn import connect
+    make_user()
+    s = login(client)
+    s2 = client.post("/v1/auth/refresh", json={"refreshToken": s["refreshToken"]}).json()
+    with connect() as c:
+        c.execute("UPDATE devices SET refresh_rotated_at=NULL")
+    r = client.post("/v1/auth/refresh", json={"refreshToken": s["refreshToken"]})
+    assert r.json()["error"]["code"] == "refresh_token_reused"
+    assert client.get("/v1/me", headers=bearer(s2)).json()["error"]["code"] == "device_revoked"
+
+
+def test_logout_is_logged(client, caplog):
+    make_user()
+    s = login(client)
+    assert client.post("/v1/auth/logout", headers=bearer(s)).status_code == 200
+    assert f"signed device {s['device']['id']} out" in caplog.text
+
+
+def test_refresh_rotates_and_reuse_revokes_device(client, monkeypatch):
     make_user()
     s = login(client)
     r1 = client.post("/v1/auth/refresh", json={"refreshToken": s["refreshToken"]})
@@ -53,7 +116,8 @@ def test_refresh_rotates_and_reuse_revokes_device(client):
     s2 = r1.json()
     assert s2["refreshToken"] != s["refreshToken"]
     assert s2["library"]["password"] == s["library"]["password"]   # same device, same secret
-    # The old token again: theft → the whole device is revoked.
+    # The old token again, well after the rotation: theft → the whole device is revoked.
+    _later(monkeypatch, seconds=61)
     r2 = client.post("/v1/auth/refresh", json={"refreshToken": s["refreshToken"]})
     assert r2.json()["error"]["code"] == "refresh_token_reused"
     assert client.get("/v1/me", headers=bearer(s2)).json()["error"]["code"] == "device_revoked"

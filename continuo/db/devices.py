@@ -33,13 +33,18 @@ def by_refresh_hash(refresh_hash: str) -> tuple[dict | None, bool]:
         return d, d is not None
 
 
-def rotate_refresh(device_id: str, new_hash: str, expires_at: str) -> None:
+def rotate_refresh(device_id: str, new_hash: str, expires_at: str, rotated_at: str,
+                   presented_hash: str) -> bool:
+    """Replace the token that was presented: the previous one becomes the device's current token's
+    predecessor. False when another refresh of this device got there first (a concurrent replay):
+    nothing changes and the caller must not hand out the new token."""
     with connect() as c:
-        c.execute(
+        return c.execute(
             "UPDATE devices SET prev_refresh_hash=refresh_hash, refresh_hash=?, "
-            "refresh_expires_at=?, last_seen_at=? WHERE id=?",
-            (new_hash, expires_at, now(), device_id),
-        )
+            "refresh_expires_at=?, refresh_rotated_at=?, last_seen_at=? "
+            "WHERE id=? AND revoked_at IS NULL AND (refresh_hash=? OR prev_refresh_hash=?)",
+            (new_hash, expires_at, rotated_at, now(), device_id, presented_hash, presented_hash),
+        ).rowcount > 0
 
 
 def list_for_user(user_id: int, include_revoked: bool = False) -> list[dict]:
